@@ -18,13 +18,17 @@ class ChamadoTest {
     private static final List<Duration> ESPERAS =
             List.of(Duration.ofMinutes(5), Duration.ofMinutes(30), Duration.ofHours(2));
 
+    private static ResultadoDaTriagem resultado(String provedor) {
+        return new ResultadoDaTriagem(CLASSIFICACAO, provedor, false, List.of(), Duration.ofMillis(1200));
+    }
+
     @Test
     @DisplayName("registrar a triagem preenche a classificacao e encerra a reserva")
     void registraTriagem() {
         Chamado chamado = new Chamado("texto", AGORA);
         chamado.reservarAte(AGORA.plusSeconds(120));
 
-        chamado.registrarTriagem(CLASSIFICACAO, "gemini", false, AGORA);
+        chamado.registrarTriagem(resultado("gemini"), AGORA);
 
         assertThat(chamado.getStatus()).isEqualTo(StatusChamado.TRIADO);
         assertThat(chamado.getCategoria()).isEqualTo(Categoria.ACESSO);
@@ -33,12 +37,25 @@ class ChamadoTest {
     }
 
     @Test
+    @DisplayName("triagem por fallback guarda quem falhou antes e quanto a rodada levou")
+    void triagemPorFallback() {
+        Chamado chamado = new Chamado("texto", AGORA);
+
+        chamado.registrarTriagem(new ResultadoDaTriagem(CLASSIFICACAO, "groq", false, List.of("gemini"),
+                Duration.ofMillis(4321)), AGORA);
+
+        assertThat(chamado.getProvedor()).isEqualTo("groq");
+        assertThat(chamado.getProvedoresQueFalharam()).containsExactly("gemini");
+        assertThat(chamado.getDuracaoDaTriagemMs()).isEqualTo(4321);
+    }
+
+    @Test
     @DisplayName("chamado triado nao pode ser triado de novo")
     void naoTriaDuasVezes() {
         Chamado chamado = new Chamado("texto", AGORA);
-        chamado.registrarTriagem(CLASSIFICACAO, "gemini", false, AGORA);
+        chamado.registrarTriagem(resultado("gemini"), AGORA);
 
-        assertThatThrownBy(() -> chamado.registrarTriagem(CLASSIFICACAO, "gemini", false, AGORA))
+        assertThatThrownBy(() -> chamado.registrarTriagem(resultado("gemini"), AGORA))
                 .isInstanceOf(TransicaoInvalidaException.class);
     }
 
@@ -46,7 +63,7 @@ class ChamadoTest {
     @DisplayName("chamado triado nao registra falha de triagem")
     void triadoNaoRegistraFalha() {
         Chamado chamado = new Chamado("texto", AGORA);
-        chamado.registrarTriagem(CLASSIFICACAO, "gemini", false, AGORA);
+        chamado.registrarTriagem(resultado("gemini"), AGORA);
 
         assertThatThrownBy(() -> chamado.registrarFalhaDaTriagem(AGORA, ESPERAS))
                 .isInstanceOf(TransicaoInvalidaException.class);
@@ -102,7 +119,7 @@ class ChamadoTest {
         Chamado chamado = new Chamado("texto", AGORA);
         chamado.registrarFalhaDaTriagem(AGORA, ESPERAS);
 
-        chamado.registrarTriagem(CLASSIFICACAO, "groq", false, AGORA.plus(Duration.ofMinutes(5)));
+        chamado.registrarTriagem(resultado("groq"), AGORA.plus(Duration.ofMinutes(5)));
 
         assertThat(chamado.getStatus()).isEqualTo(StatusChamado.TRIADO);
         assertThat(chamado.getProximaTentativaEm()).isNull();

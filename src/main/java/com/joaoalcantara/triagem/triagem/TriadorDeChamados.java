@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import com.joaoalcantara.triagem.chamado.ResultadoDaTriagem;
 import com.joaoalcantara.triagem.infra.MetricasDaTriagem;
 import com.joaoalcantara.triagem.triagem.ClassificadorComValidacao.TriagemObtida;
 import com.joaoalcantara.triagem.triagem.FilaDeTriagem.ChamadoReservado;
@@ -75,9 +76,10 @@ public class TriadorDeChamados {
         long inicio = System.nanoTime();
         try {
             TriagemObtida triagem = classificador.classificar(chamado.texto());
-            fila.registrarTriagem(chamado.id(), triagem.classificacao(), triagem.provedor(), triagem.doCache());
-            metricas.triagem("triado", triagem.provedor(), triagem.houveFallback(), triagem.doCache(),
-                    Duration.ofNanos(System.nanoTime() - inicio));
+            Duration duracao = Duration.ofNanos(System.nanoTime() - inicio);
+            fila.registrarTriagem(chamado.id(), new ResultadoDaTriagem(triagem.classificacao(), triagem.provedor(),
+                    triagem.doCache(), triagem.provedoresQueFalharam(), duracao));
+            metricas.triagem("triado", triagem.provedor(), triagem.houveFallback(), triagem.doCache(), duracao);
             if (triagem.doCache()) {
                 log.info("Chamado {} triado pelo cache (classificacao original de {})", chamado.id(),
                         triagem.provedor());

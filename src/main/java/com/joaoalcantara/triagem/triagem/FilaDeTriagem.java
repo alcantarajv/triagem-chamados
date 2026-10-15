@@ -12,7 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.joaoalcantara.triagem.chamado.Chamado;
 import com.joaoalcantara.triagem.chamado.ChamadoRepositorio;
-import com.joaoalcantara.triagem.chamado.Classificacao;
+import com.joaoalcantara.triagem.chamado.ResultadoDaTriagem;
 import com.joaoalcantara.triagem.chamado.StatusChamado;
 
 /**
@@ -79,12 +79,12 @@ public class FilaDeTriagem {
     }
 
     @Transactional
-    public void registrarTriagem(UUID id, Classificacao classificacao, String provedor, boolean doCache) {
+    public void registrarTriagem(UUID id, ResultadoDaTriagem resultado) {
         Chamado chamado = repositorio.buscarParaAtualizar(id).orElseThrow();
         if (!aindaEsperaTriagem(chamado)) {
             return;
         }
-        chamado.registrarTriagem(classificacao, provedor, doCache, relogio.instant());
+        chamado.registrarTriagem(resultado, relogio.instant());
     }
 
     /** A rodada falhou: o chamado fica pendente, com ou sem nova tentativa agendada. */

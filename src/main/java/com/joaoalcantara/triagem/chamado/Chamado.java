@@ -100,6 +100,13 @@ public class Chamado {
     @Column(name = "veio_do_cache", nullable = false)
     private boolean veioDoCache;
 
+    /** Provedores que falharam antes do que classificou, separados por virgula. */
+    @Column(name = "provedores_que_falharam", length = 100)
+    private String provedoresQueFalharam;
+
+    @Column(name = "duracao_da_triagem_ms")
+    private Integer duracaoDaTriagemMs;
+
     protected Chamado() {
         // exigido pelo JPA
     }
@@ -114,19 +121,18 @@ public class Chamado {
         this.reservadoAte = Objects.requireNonNull(limite, "limite");
     }
 
-    /**
-     * Aplica o resultado da triagem automatica e encerra a reserva.
-     *
-     * @param provedor quem classificou; quando {@code doCache}, quem classificou
-     *                 originalmente o texto que ficou guardado
-     */
-    public void registrarTriagem(Classificacao classificacao, String provedor, boolean doCache, Instant agora) {
+    /** Aplica o resultado da triagem automatica e encerra a reserva. */
+    public void registrarTriagem(ResultadoDaTriagem resultado, Instant agora) {
         mudarPara(StatusChamado.TRIADO);
-        this.veioDoCache = doCache;
+        Classificacao classificacao = resultado.classificacao();
         this.categoria = Objects.requireNonNull(classificacao.categoria(), "categoria");
         this.prioridade = Objects.requireNonNull(classificacao.prioridade(), "prioridade");
         this.resumo = Objects.requireNonNull(classificacao.resumo(), "resumo");
-        this.provedor = Objects.requireNonNull(provedor, "provedor");
+        this.provedor = resultado.provedor();
+        this.veioDoCache = resultado.doCache();
+        this.provedoresQueFalharam = resultado.provedoresQueFalharam().isEmpty() ? null
+                : String.join(",", resultado.provedoresQueFalharam());
+        this.duracaoDaTriagemMs = Math.toIntExact(resultado.duracao().toMillis());
         this.triadoEm = Objects.requireNonNull(agora, "agora");
         this.reservadoAte = null;
         this.proximaTentativaEm = null;
@@ -215,5 +221,13 @@ public class Chamado {
 
     public boolean isVeioDoCache() {
         return veioDoCache;
+    }
+
+    public List<String> getProvedoresQueFalharam() {
+        return provedoresQueFalharam == null ? List.of() : List.of(provedoresQueFalharam.split(","));
+    }
+
+    public Integer getDuracaoDaTriagemMs() {
+        return duracaoDaTriagemMs;
     }
 }

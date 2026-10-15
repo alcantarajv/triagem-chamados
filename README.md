@@ -4,7 +4,7 @@ API REST que recebe chamados de suporte em texto livre e usa um modelo de lingua
 
 O que este projeto resolve não é o prompt. É a engenharia de backend em volta de uma dependência que **demora, falha, cobra por uso e às vezes responde algo fora do combinado**.
 
-> **Status:** em construção — Etapa 9 de 13. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 10 de 13. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -212,6 +212,16 @@ Algumas escolhas por trás da tabela:
 
 Os testes provocam cada situação — triagem pelo principal, fallback, acerto de cache, resposta inválida, circuito aberto, orçamento esgotado, pendente, limite excedido — e conferem que a métrica correspondente mudou. Na aplicação real, oito triagens pelo Gemini registraram 1,13s de latência média por requisição e cerca de 300 tokens de entrada e 35 de saída por triagem.
 
+### Página de demonstração na raiz
+
+A raiz serve uma página estática, sem framework e sem build, que usa a própria API como qualquer cliente: envia o chamado (`POST`, `202`) e consulta o resultado (`GET`) a cada segundo até o worker terminar. Ela mostra o que o projeto defende: **o tempo de resposta do `POST` ao lado do tempo da triagem**, quem respondeu, se houve fallback e se veio do cache. Quando nenhum provedor resolve, mostra o chamado pendente e a hora da próxima tentativa automática; passado o limite por hora, o `429` e quanto falta para a janela virar.
+
+- **Aviso de dados pessoais em destaque**, e cinco exemplos fictícios prontos. O texto vai para provedores em plano gratuito, e no do Google o conteúdo pode ser usado para melhorar os modelos.
+- **Nenhum `innerHTML`.** O resumo exibido é escrito pelo modelo a partir de um texto que o visitante controla; um chamado feito para induzir o modelo a devolver HTML viraria XSS na página. Todo conteúdo da API entra por `textContent`, e um teste lê o script da página e falha se aparecer `innerHTML`, `outerHTML`, `insertAdjacentHTML` ou `document.write`.
+- **Os exemplos prontos tendem a vir do cache**, e a página avisa: outro visitante já pode tê-los enviado, e basta mudar uma palavra para ver um provedor responder. É o cache funcionando à vista.
+
+Conferida no navegador com os provedores reais: um exemplo pronto foi triado pelo Gemini com o `POST` respondendo em 87ms e a triagem levando 2,5s; o mesmo texto de novo veio do cache; e, com o Gemini fora do alcance de propósito, um texto novo foi triado pelo Groq com o fallback indicado na página.
+
 ### O SDK não repete chamadas escondido
 
 O Spring AI 2.0 usa o SDK oficial da OpenAI, que por padrão **repete até três vezes** uma chamada que falhou, sem a aplicação ficar sabendo. Desligado (`maxRetries(0)`): quantas vezes repetir, e diante de qual erro, é decisão da aplicação, não da biblioteca — e, com as duas políticas ligadas, as tentativas se multiplicariam. Um teste comprova que três falhas seguidas geram exatamente **três** requisições. Quando essa proteção foi verificada pela primeira vez, religando o padrão do SDK, um único `500` virou quatro requisições.
@@ -357,25 +367,30 @@ Content-Type: application/json
 }
 ```
 
-Depois que o worker triar o chamado, o `GET` traz a classificação. Resposta real, com o Gemini (`gemini-3.5-flash-lite`):
+Depois que o worker triar o chamado, o `GET` traz a classificação e como ela foi obtida: quem respondeu, se houve fallback, se veio do cache e quanto a triagem levou. Resposta real, com o Gemini fora do alcance de propósito e o Groq respondendo no lugar dele:
 
 ```json
 {
-  "id": "01a14036-0b70-7fe3-8c65-84fa7ab25457",
-  "texto": "Nao consigo emitir a segunda via do boleto pelo aplicativo.",
+  "id": "01a140fa-aa95-71a0-aa58-0450c2292ec1",
+  "texto": "O leitor de código de barras do caixa parou de funcionar depois da troca do computador da loja.",
   "status": "TRIADO",
-  "criadoEm": "2026-10-15T15:37:26.122906Z",
+  "criadoEm": "2026-10-15T19:12:11.916205Z",
   "triagem": {
-    "categoria": "FINANCEIRO",
-    "prioridade": "MEDIA",
-    "resumo": "Impossibilidade de emissao de segunda via de boleto no aplicativo.",
-    "provedor": "gemini",
+    "categoria": "TECNICO",
+    "prioridade": "ALTA",
+    "resumo": "Leitor de código de barras do caixa parou de funcionar após troca de computador.",
+    "provedor": "groq",
     "doCache": false,
-    "triadoEm": "2026-10-15T15:37:33.418883Z"
+    "fallback": true,
+    "provedoresQueFalharam": ["gemini"],
+    "duracaoMs": 5167,
+    "triadoEm": "2026-10-15T19:12:17.443863Z"
   },
   "proximaTentativaAutomatica": null
 }
 ```
+
+`duracaoMs` é o tempo da triagem em si, da reserva ao resultado — aqui, as três tentativas recusadas no Gemini, as esperas entre elas e a resposta do Groq. A diferença entre `criadoEm` e `triadoEm` soma a isso a espera na fila.
 
 Se a rodada inteira de triagem falhar, o status vira `PENDENTE_TRIAGEM_MANUAL`, `triagem` continua `null` e `proximaTentativaAutomatica` diz quando o revisor tenta de novo. Resposta real, com os dois provedores inalcançáveis (esperas encurtadas para a demonstração):
 
@@ -422,7 +437,7 @@ No Windows, use `mvnw.cmd` no lugar de `./mvnw`.
 
 Para a triagem automática funcionar, coloque no `.env` as chaves dos provedores: a do Gemini, gerada em <https://aistudio.google.com> (**Get API key**), e a do Groq, gerada em <https://console.groq.com> (**API Keys**). Com uma só, a cadeia fica só com aquele provedor; sem nenhuma, a aplicação sobe do mesmo jeito e os chamados vão para triagem manual. No plano gratuito, o Google pode usar o conteúdo enviado para melhorar os modelos: não envie dados reais.
 
-A aplicação sobe em <http://localhost:8080>.
+A aplicação sobe em <http://localhost:8080>, com a página de demonstração na raiz.
 
 ```bash
 curl http://localhost:8080/actuator/health
@@ -487,7 +502,7 @@ Java 21 · Spring Boot 4 · Spring AI · Google Gemini · Groq · PostgreSQL · 
 - [x] **Etapa 7** — Degradação: triagem manual quando todos os provedores falham e job de nova tentativa
 - [x] **Etapa 8** — Controle de custo: cache por texto normalizado, limite por cliente e orçamento diário
 - [x] **Etapa 9** — Métricas por provedor com Micrometer e Prometheus
-- [ ] **Etapa 10** — Página de demonstração
+- [x] **Etapa 10** — Página de demonstração
 - [ ] **Etapa 11** — Dockerfile, CI no GitHub Actions e deploy no Render
 - [ ] **Etapa 12** — README final
 - [ ] **Etapa 13** — Divulgação

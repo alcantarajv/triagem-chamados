@@ -1,6 +1,7 @@
 package com.joaoalcantara.triagem.chamado;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -24,9 +25,12 @@ public record ChamadoResposta(
         Instant proximaTentativaAutomatica) {
 
     /**
-     * @param doCache a classificacao foi reaproveitada de um texto igual, sem
-     *                chamar provedor; {@code provedor} e entao quem o classificou
-     *                originalmente
+     * @param doCache               a classificacao foi reaproveitada de um texto
+     *                              igual, sem chamar provedor; {@code provedor} e
+     *                              entao quem o classificou originalmente
+     * @param fallback              o principal falhou e outro provedor respondeu
+     * @param provedoresQueFalharam os que falharam antes, na ordem da cadeia
+     * @param duracaoMs             quanto a triagem levou, sem contar a espera na fila
      */
     public record TriagemResposta(
             Categoria categoria,
@@ -34,6 +38,9 @@ public record ChamadoResposta(
             String resumo,
             String provedor,
             boolean doCache,
+            boolean fallback,
+            List<String> provedoresQueFalharam,
+            Integer duracaoMs,
             Instant triadoEm) {
     }
 
@@ -45,6 +52,9 @@ public record ChamadoResposta(
                         chamado.getResumo(),
                         chamado.getProvedor(),
                         chamado.isVeioDoCache(),
+                        !chamado.getProvedoresQueFalharam().isEmpty(),
+                        chamado.getProvedoresQueFalharam(),
+                        chamado.getDuracaoDaTriagemMs(),
                         chamado.getTriadoEm());
 
         return new ChamadoResposta(

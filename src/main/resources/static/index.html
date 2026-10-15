@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Triagem de Chamados com IA resiliente</title>
+<!--
+  Pagina estatica, sem framework e sem build. O que interessa no projeto e o
+  backend; esta pagina so precisa deixa-lo demonstravel sem abrir um terminal.
+
+  Ela usa a propria API, como qualquer cliente: envia o chamado (POST, 202),
+  e consulta o resultado (GET) ate o worker terminar a triagem.
+
+  Todo conteudo que vem da API entra na pagina por textContent, nunca por
+  innerHTML. O resumo e escrito pelo modelo a partir de um texto que o
+  visitante controla: um chamado feito para induzir o modelo a devolver HTML
+  viraria XSS aqui.
+-->
+<style>
+  :root {
+    --fundo: #0f1115;
+    --cartao: #171a21;
+    --borda: #262b36;
+    --texto: #e6e9ef;
+    --suave: #9aa4b2;
+    --destaque: #7aa2f7;
+    --ok: #4ade80;
+    --alerta: #fbbf24;
+    --erro: #f87171;
+    --codigo: #0b0d11;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--fundo);
+    color: var(--texto);
+    font: 16px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; padding: 48px 20px 72px; }
+  h1 { font-size: 2rem; margin: 0 0 8px; letter-spacing: -0.02em; }
+  h2 { font-size: 1.25rem; margin: 40px 0 12px; letter-spacing: -0.01em; }
+  p { color: var(--suave); margin: 0 0 14px; }
+  p.chamada { color: var(--texto); font-size: 1.05rem; }
+  a { color: var(--destaque); }
+  code { background: var(--codigo); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+  .cartao {
+    background: var(--cartao);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 20px;
+    margin: 20px 0;
+  }
+  .aviso {
+    border-left: 4px solid var(--alerta);
+    background: #221d0c;
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin: 24px 0;
+    color: var(--texto);
+  }
+  .aviso strong { color: var(--alerta); }
+  .exemplos { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+  .exemplos button {
+    background: transparent;
+    color: var(--texto);
+    border: 1px solid var(--borda);
+    font-weight: 500;
+    font-size: 14px;
+    padding: 6px 12px;
+  }
+  .exemplos button:hover { border-color: var(--destaque); }
+  textarea {
+    width: 100%;
+    min-height: 110px;
+    resize: vertical;
+    background: var(--codigo);
+    color: var(--texto);
+    border: 1px solid var(--borda);
+    border-radius: 8px;
+    padding: 12px;
+    font: 15px/1.5 system-ui, sans-serif;
+  }
+  textarea:focus { outline: 2px solid var(--destaque); outline-offset: 1px; }
+  .acoes { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
+  .contador { color: var(--suave); font-size: 13px; }
+  button {
+    background: var(--destaque);
+    color: #0b1020;
+    border: 0;
+    border-radius: 8px;
+    padding: 11px 20px;
+    font: 600 15px system-ui, sans-serif;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.55; cursor: progress; }
+  pre {
+    background: var(--codigo);
+    border: 1px solid var(--borda);
+    border-radius: 8px;
+    padding: 14px;
+    font-size: 13px;
+    line-height: 1.55;
+    margin: 16px 0 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  pre:empty { display: none; }
+  .ok { color: var(--ok); }
+  .atencao { color: var(--alerta); }
+  .ruim { color: var(--erro); }
+  #resultado[hidden] { display: none; }
+  #resultado dl {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 6px 18px;
+    margin: 16px 0 0;
+  }
+  #resultado dt { color: var(--suave); }
+  #resultado dd { margin: 0; }
+  .selo {
+    display: inline-block;
+    border-radius: 999px;
+    padding: 1px 10px;
+    font-size: 13px;
+    font-weight: 600;
+    border: 1px solid var(--borda);
+  }
+  .selo.sim { color: var(--alerta); border-color: var(--alerta); }
+  .selo.nao { color: var(--suave); }
+  .selo.provedor { color: var(--destaque); border-color: var(--destaque); }
+  ul { color: var(--suave); padding-left: 20px; }
+  li { margin: 6px 0; }
+  li strong { color: var(--texto); }
+  .links a { margin-right: 18px; }
+  .rodape { margin-top: 56px; border-top: 1px solid var(--borda); padding-top: 20px; font-size: 14px; }
+  @media (max-width: 560px) {
+    #resultado dl { grid-template-columns: 1fr; gap: 0; }
+    #resultado dd { margin-bottom: 8px; }
+    .acoes { flex-direction: column; align-items: stretch; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Triagem de Chamados com IA resiliente</h1>
+  <p class="chamada">
+    Uma API que classifica chamados de suporte com um modelo de linguagem. O ponto do projeto não é
+    o prompt: é o que acontece quando o provedor de IA <strong>demora, cai, estoura a cota ou responde
+    fora do combinado</strong> — e o chamado não pode se perder por causa disso.
+  </p>
+
+  <div class="links">
+    <a href="https://github.com/alcantarajv/triagem-chamados">Código e decisões no GitHub</a>
+    <a href="/actuator/health">Health</a>
+    <a href="/actuator/prometheus">Métricas (Prometheus)</a>
+  </div>
+
+  <div class="aviso" role="note">
+    <strong>Não cole dados pessoais.</strong> O texto vai para provedores de IA em plano gratuito, e no
+    do Google o conteúdo enviado pode ser usado para melhorar os modelos. Use os exemplos fictícios ou
+    invente um chamado.
+  </div>
+
+  <h2>Abra um chamado</h2>
+  <div class="cartao">
+    <div class="exemplos" id="exemplos" aria-label="Exemplos fictícios"></div>
+    <label for="texto" class="contador">Texto do chamado</label>
+    <textarea id="texto" maxlength="4000"
+              placeholder="Descreva um problema fictício, como faria um cliente do suporte."></textarea>
+    <div class="acoes">
+      <span class="contador" id="contador">0 / 4000</span>
+      <button id="enviar" type="button">Enviar chamado</button>
+    </div>
+    <p class="contador" style="margin-top:10px">
+      Os exemplos prontos costumam vir do cache — outro visitante já pode tê-los enviado. Mude uma
+      palavra para ver um provedor responder de verdade.
+    </p>
+
+    <pre id="saida" aria-live="polite"></pre>
+
+    <div id="resultado" hidden>
+      <dl>
+        <dt>Categoria</dt><dd id="r-categoria"></dd>
+        <dt>Prioridade</dt><dd id="r-prioridade"></dd>
+        <dt>Resumo</dt><dd id="r-resumo"></dd>
+        <dt>Quem respondeu</dt><dd><span class="selo provedor" id="r-provedor"></span></dd>
+        <dt>Fallback</dt><dd id="r-fallback"></dd>
+        <dt>Do cache</dt><dd id="r-cache"></dd>
+        <dt>Tempo da triagem</dt><dd id="r-duracao"></dd>
+        <dt>Do envio ao resultado</dt><dd id="r-total"></dd>
+        <dt>Resposta do POST</dt><dd id="r-post"></dd>
+      </dl>
+    </div>
+  </div>
+
+  <h2>O que acontece por trás</h2>
+  <ul>
+    <li><strong>O POST responde na hora.</strong> O chamado é gravado e a resposta é <code>202 Accepted</code>,
+      sem esperar o modelo: compare o tempo da resposta do POST com o tempo da triagem.</li>
+    <li><strong>Um worker tria depois</strong>, pegando a fila no banco com <code>SELECT ... FOR UPDATE SKIP LOCKED</code>,
+      sem segurar transação enquanto o modelo pensa.</li>
+    <li><strong>A resposta do modelo é validada</strong> antes de ser aceita. Inválida, ganha uma correção com o
+      erro apontado — e só uma.</li>
+    <li><strong>Erros transitórios são repetidos com critério</strong>: espera crescente, e o tempo que o provedor
+      pedir quando ele estoura a cota. Erro de requisição inválida não se repete.</li>
+    <li><strong>Se o Gemini falhar, o Groq responde</strong>, e um circuit breaker por provedor pula quem está fora
+      do ar sem gastar uma requisição.</li>
+    <li><strong>O mesmo texto não paga duas vezes</strong>: cache por texto normalizado, orçamento diário por
+      provedor e limite de 10 chamados por hora por visitante.</li>
+    <li><strong>Se tudo falhar, nada se perde</strong>: o chamado fica pendente e é revisitado mais tarde, com
+      espera crescente.</li>
+  </ul>
+
+  <p class="rodape">
+    O serviço roda no plano gratuito do Render e hiberna quando ocioso: a primeira requisição depois de um
+    tempo parado leva cerca de um minuto para responder, e as seguintes são imediatas.<br>
+    <strong>João Vitor Alcântara Corrêa</strong> ·
+    <a href="https://joaoalcantara.dev">joaoalcantara.dev</a> ·
+    <a href="https://github.com/alcantarajv">GitHub</a> ·
+    <a href="https://linkedin.com/in/joaovalcantara">LinkedIn</a>
+  </p>
+</main>
+
+<script>
+// Chamados ficticios: nenhum nome, documento, e-mail ou telefone de verdade.
+const EXEMPLOS = [
+  ['Aplicativo fechando', 'Desde a atualização de ontem, o aplicativo fecha sozinho quando tento anexar uma foto ao pedido.'],
+  ['Cobrança em dobro', 'Fui cobrado duas vezes pela mensalidade de outubro e preciso do estorno de uma delas.'],
+  ['Senha', 'Esqueci minha senha e o e-mail de recuperação não chega, nem na caixa de spam.'],
+  ['Dúvida', 'Onde encontro a opção de exportar o relatório mensal em PDF?'],
+  ['Sistema fora do ar', 'O sistema de vendas está fora do ar em todas as lojas e não conseguimos emitir cupom fiscal.']
+];
+
+const CONSULTA_A_CADA_MS = 1000;
+const DESISTE_DEPOIS_DE_MS = 90000;
+const NOMES = { gemini: 'Gemini', groq: 'Groq' };
+
+const texto = document.getElementById('texto');
+const contador = document.getElementById('contador');
+const botao = document.getElementById('enviar');
+const saida = document.getElementById('saida');
+const resultado = document.getElementById('resultado');
+
+for (const [rotulo, exemplo] of EXEMPLOS) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = rotulo;
+  b.addEventListener('click', () => { texto.value = exemplo; atualizarContador(); texto.focus(); });
+  document.getElementById('exemplos').appendChild(b);
+}
+
+function atualizarContador() {
+  contador.textContent = `${texto.value.length} / 4000`;
+}
+texto.addEventListener('input', atualizarContador);
+
+function escrever(linha, classe) {
+  const span = document.createElement('span');
+  if (classe) span.className = classe;
+  span.textContent = linha + '\n';
+  saida.appendChild(span);
+}
+
+function segundos(ms) {
+  return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} s`;
+}
+
+function nomeDoProvedor(nome) {
+  return NOMES[nome] || nome;
+}
+
+function selo(sim, textoSim, textoNao) {
+  const span = document.createElement('span');
+  span.className = 'selo ' + (sim ? 'sim' : 'nao');
+  span.textContent = sim ? textoSim : textoNao;
+  return span;
+}
+
+function preencher(id, valor) {
+  document.getElementById(id).textContent = valor;
+}
+
+async function pedir(url, opcoes) {
+  const inicio = performance.now();
+  const resposta = await fetch(url, opcoes);
+  const ms = Math.round(performance.now() - inicio);
+  let corpo = null;
+  try { corpo = await resposta.json(); } catch { corpo = null; }
+  return { resposta, corpo, ms };
+}
+
+const esperar = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function mostrarResultado(chamado, msDoPost) {
+  const t = chamado.triagem;
+  preencher('r-categoria', t.categoria);
+  preencher('r-prioridade', t.prioridade);
+  preencher('r-resumo', t.resumo);
+  preencher('r-provedor', nomeDoProvedor(t.provedor));
+
+  const fallback = document.getElementById('r-fallback');
+  fallback.replaceChildren(selo(t.fallback,
+      `sim — ${t.provedoresQueFalharam.map(nomeDoProvedor).join(', ')} falhou antes`, 'não'));
+
+  const cache = document.getElementById('r-cache');
+  cache.replaceChildren(selo(t.doCache,
+      `sim — classificação original de ${nomeDoProvedor(t.provedor)}, sem chamar provedor`, 'não'));
+
+  preencher('r-duracao', t.duracaoMs == null ? '—' : segundos(t.duracaoMs));
+  preencher('r-total', segundos(new Date(t.triadoEm) - new Date(chamado.criadoEm)) + ' (inclui a espera na fila)');
+  preencher('r-post', segundos(msDoPost));
+  resultado.hidden = false;
+}
+
+botao.addEventListener('click', async () => {
+  const conteudo = texto.value.trim();
+  saida.replaceChildren();
+  resultado.hidden = true;
+  if (!conteudo) {
+    escrever('Escreva um chamado ou escolha um exemplo.', 'atencao');
+    return;
+  }
+
+  botao.disabled = true;
+  try {
+    escrever('$ POST /api/chamados');
+    const envio = await pedir('/api/chamados', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texto: conteudo })
+    });
+
+    if (envio.resposta.status === 429) {
+      const espera = Number(envio.resposta.headers.get('Retry-After')) || 0;
+      escrever(`  429 — ${envio.corpo?.detail || 'limite de chamados atingido'}`, 'ruim');
+      if (espera) escrever(`  Retry-After: ${espera} s (cerca de ${Math.ceil(espera / 60)} min)`, 'atencao');
+      return;
+    }
+    if (envio.resposta.status !== 202) {
+      escrever(`  ${envio.resposta.status} — ${envio.corpo?.detail || 'erro'}`, 'ruim');
+      for (const erro of envio.corpo?.erros || []) escrever(`  ${erro}`, 'ruim');
+      return;
+    }
+
+    const local = envio.resposta.headers.get('Location');
+    escrever(`  202 Accepted em ${segundos(envio.ms)} — chamado gravado, triagem na fila`, 'ok');
+    escrever(`\n$ GET ${local}   (consultando até o worker terminar)`);
+
+    const limite = Date.now() + DESISTE_DEPOIS_DE_MS;
+    let ultimoStatus = null;
+    while (Date.now() < limite) {
+      await esperar(CONSULTA_A_CADA_MS);
+      const consulta = await pedir(local);
+      const chamado = consulta.corpo;
+      if (!consulta.resposta.ok || !chamado) {
+        escrever(`  ${consulta.resposta.status} — falha ao consultar`, 'ruim');
+        return;
+      }
+      if (chamado.status !== ultimoStatus) {
+        escrever(`  ${chamado.status}`, chamado.status === 'TRIADO' ? 'ok' : undefined);
+        ultimoStatus = chamado.status;
+      }
+      if (chamado.status === 'TRIADO') {
+        mostrarResultado(chamado, envio.ms);
+        return;
+      }
+      if (chamado.status === 'PENDENTE_TRIAGEM_MANUAL') {
+        escrever('\nNenhum provedor resolveu agora — e o chamado não se perdeu.', 'atencao');
+        if (chamado.proximaTentativaAutomatica) {
+          const quando = new Date(chamado.proximaTentativaAutomatica).toLocaleTimeString('pt-BR');
+          escrever(`Nova tentativa automática agendada para ${quando}. Consulte ${local} depois.`, 'atencao');
+        } else {
+          escrever('As tentativas automáticas se esgotaram: o chamado espera uma pessoa.', 'atencao');
+        }
+        return;
+      }
+    }
+    escrever(`\nA triagem ainda não terminou. O chamado está gravado: consulte ${local} daqui a pouco.`, 'atencao');
+  } catch (erro) {
+    escrever(`\nFalha ao falar com a API: ${erro.message}`, 'ruim');
+  } finally {
+    botao.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

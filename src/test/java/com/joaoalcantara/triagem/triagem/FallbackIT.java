@@ -20,6 +20,7 @@ import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.client.ResponseDefinitionBuilder;
 import com.joaoalcantara.triagem.chamado.Chamado;
 import com.joaoalcantara.triagem.chamado.ChamadoRepositorio;
+import com.joaoalcantara.triagem.chamado.ChamadoResposta;
 import com.joaoalcantara.triagem.chamado.ChamadoServico;
 import com.joaoalcantara.triagem.chamado.StatusChamado;
 import com.joaoalcantara.triagem.infra.AmbienteDeTeste;
@@ -91,8 +92,15 @@ class FallbackIT {
         gemini.stubFor(ProvedorFalso.chat().willReturn(valida()));
         groq.stubFor(ProvedorFalso.chat().willReturn(valida()));
 
-        assertThat(triar().getProvedor()).isEqualTo("gemini");
+        Chamado chamado = triar();
+
+        assertThat(chamado.getProvedor()).isEqualTo("gemini");
         verificar(groq, 0);
+        // A API diz que nao houve fallback, e quanto a triagem levou.
+        ChamadoResposta.TriagemResposta triagem = ChamadoResposta.de(chamado).triagem();
+        assertThat(triagem.fallback()).isFalse();
+        assertThat(triagem.provedoresQueFalharam()).isEmpty();
+        assertThat(triagem.duracaoMs()).isNotNull().isNotNegative();
     }
 
     @Test
@@ -127,8 +135,16 @@ class FallbackIT {
         gemini.stubFor(ProvedorFalso.chat().willReturn(status(503)));
         groq.stubFor(ProvedorFalso.chat().willReturn(valida()));
 
-        assertThat(triar().getProvedor()).isEqualTo("groq");
+        Chamado chamado = triar();
+
+        assertThat(chamado.getProvedor()).isEqualTo("groq");
         verificar(gemini, 3);
+        // E a API mostra o fallback: quem falhou antes, e quanto a rodada inteira
+        // levou — inclusive as tentativas e esperas no Gemini.
+        ChamadoResposta.TriagemResposta triagem = ChamadoResposta.de(chamado).triagem();
+        assertThat(triagem.fallback()).isTrue();
+        assertThat(triagem.provedoresQueFalharam()).containsExactly("gemini");
+        assertThat(triagem.duracaoMs()).isGreaterThanOrEqualTo(100);
     }
 
     @Test
