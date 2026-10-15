@@ -17,17 +17,30 @@
 
 	<properties>
 		<java.version>21</java.version>
+		<!-- Linha do Spring AI compativel com o Boot 4.0 e 4.1, conferida no
+		     start.spring.io. A 2.1 so funciona a partir do Boot 4.2. -->
+		<spring-ai.version>2.0.1</spring-ai.version>
+		<!-- Nao gerenciado pela BOM do Spring Boot. A variante "standalone"
+		     empacota as dependencias internas com nomes proprios, evitando
+		     conflito entre o Jetty do WireMock e o do Spring. -->
+		<wiremock.version>3.13.1</wiremock.version>
 	</properties>
 
-	<!--
-		Spring AI e Resilience4j ainda nao entram: cada um chega na etapa em que
-		e usado (Gemini na 3, resiliencia na 5 e na 6). Versoes ja conferidas no
-		start.spring.io para o Boot 4.1.x: Spring AI 2.0.1 e Resilience4j 2.4.0
-		(modulo resilience4j-spring-boot4).
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>org.springframework.ai</groupId>
+				<artifactId>spring-ai-bom</artifactId>
+				<version>${spring-ai.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
 
-		O starter do Spring AI exige a chave do provedor para o contexto subir;
-		adiciona-lo agora faria o teste de contexto depender de um segredo, e o CI
-		nao tem segredo nenhum.
+	<!--
+		Resilience4j ainda nao entra: chega na etapa em que e usado (5 e 6).
+		Versao conferida para o Boot 4.1.x: 2.4.0, modulo resilience4j-spring-boot4.
 	-->
 	<dependencies>
 		<dependency>
@@ -49,6 +62,21 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+		<!--
+			Spring AI sem o starter: so o modelo compativel com a API da OpenAI e o
+			ChatClient. O starter cria um unico ChatModel a partir de
+			spring.ai.openai.*, e este projeto precisa de um por provedor (Gemini
+			agora, Groq na Etapa 6), cada um com URL, chave, modelo e tempo limite
+			proprios. Os beans sao montados a mao em provedor.ConfiguracaoDosProvedores.
+		-->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-openai</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-client-chat</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.flywaydb</groupId>
@@ -103,6 +131,18 @@
 		<dependency>
 			<groupId>org.testcontainers</groupId>
 			<artifactId>testcontainers-postgresql</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!--
+			WireMock sobe um servidor HTTP de verdade no lugar do provedor de IA.
+			Nenhum teste automatizado chama um provedor real: o CI nao tem chave, e
+			as falhas que importam (lentidao, 429, 500, JSON quebrado) nao se
+			provocam sob encomenda num provedor de verdade.
+		-->
+		<dependency>
+			<groupId>org.wiremock</groupId>
+			<artifactId>wiremock-standalone</artifactId>
+			<version>${wiremock.version}</version>
 			<scope>test</scope>
 		</dependency>
 	</dependencies>

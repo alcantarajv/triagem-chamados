@@ -10,15 +10,19 @@ import org.springframework.context.annotation.Import;
 
 /**
  * Marca um teste de integracao: sobe a aplicacao inteira contra um PostgreSQL de
- * verdade.
+ * verdade, com o WireMock no lugar do provedor de IA e um relogio que o teste
+ * controla.
  *
- * <p>Anotacao composta para que nenhuma classe de teste repita a configuracao
- * dos containers — e para que acrescentar o WireMock no papel dos provedores,
- * na Etapa 3, seja uma edicao em um lugar so.</p>
+ * <p>O agendamento do worker fica desligado: cada teste aciona o triador no
+ * momento exato, em vez de competir com uma execucao em segundo plano que
+ * poderia pegar o chamado antes da hora.</p>
+ *
+ * <p>Anotacao composta para que nenhuma classe de teste repita essa
+ * configuracao — e para que muda-la seja uma edicao em um lugar so.</p>
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
-@SpringBootTest
-@Import(PostgresDeTeste.class)
+@SpringBootTest(properties = "triagem.worker.habilitado=false")
+@Import({PostgresDeTeste.class, ProvedorFalso.class, RelogioAjustavel.class})
 public @interface TesteDeIntegracao {
 }
