@@ -8,10 +8,8 @@ import javax.sql.DataSource;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 
-import com.joaoalcantara.triagem.infra.PostgresDeTeste;
+import com.joaoalcantara.triagem.infra.TesteDeIntegracao;
 
 /**
  * Prova que o scaffold sobe de pe: contexto carregado e banco conectado.
@@ -28,8 +26,7 @@ import com.joaoalcantara.triagem.infra.PostgresDeTeste;
  * <p>Sufixo {@code IT}: roda no {@code mvnw verify} pelo failsafe, e exige
  * Docker. O {@code mvnw test} continua rapido, so com os unitarios.</p>
  */
-@SpringBootTest
-@Import(PostgresDeTeste.class)
+@TesteDeIntegracao
 class ContextoDaAplicacaoIT {
 
     @Autowired
