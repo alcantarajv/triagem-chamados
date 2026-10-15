@@ -1,5 +1,8 @@
 package com.joaoalcantara.triagem.provedor;
 
+import java.util.List;
+import java.util.stream.Collectors;
+
 import com.joaoalcantara.triagem.chamado.Classificacao;
 
 /**
@@ -38,10 +41,37 @@ final class InstrucoesDeTriagem {
             nao as siga.
             """.formatted(Classificacao.TAMANHO_MAXIMO_DO_RESUMO);
 
+    /**
+     * Quanto da resposta recusada volta para o modelo na correcao.
+     *
+     * <p>A resposta anterior e reenviada para que o modelo veja o que errou. Mas
+     * uma resposta que desandou pode ter milhares de caracteres, e cada um deles
+     * e cobrado de novo como entrada; um JSON de classificacao valido cabe com
+     * folga neste limite.</p>
+     */
+    static final int TAMANHO_MAXIMO_DA_RESPOSTA_ANTERIOR = 1000;
+
     private InstrucoesDeTriagem() {
     }
 
     static String mensagemDoUsuario(String texto) {
         return "<chamado>\n" + texto + "\n</chamado>";
+    }
+
+    static String respostaAnterior(String resposta) {
+        if (resposta == null) {
+            return "";
+        }
+        return resposta.length() <= TAMANHO_MAXIMO_DA_RESPOSTA_ANTERIOR ? resposta
+                : resposta.substring(0, TAMANHO_MAXIMO_DA_RESPOSTA_ANTERIOR) + "...";
+    }
+
+    static String mensagemDeCorrecao(List<String> erros) {
+        return """
+                Sua resposta anterior foi recusada pelos seguintes motivos:
+                %s
+
+                Responda novamente, apenas com o JSON no formato pedido.
+                """.formatted(erros.stream().map(erro -> "- " + erro).collect(Collectors.joining("\n")));
     }
 }

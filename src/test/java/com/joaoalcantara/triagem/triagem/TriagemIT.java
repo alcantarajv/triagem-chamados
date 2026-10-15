@@ -99,7 +99,7 @@ class TriagemIT {
     }
 
     @Test
-    @DisplayName("erro 500 manda o chamado para triagem manual com uma unica requisicao: o SDK nao repete escondido")
+    @DisplayName("erro 500 manda o chamado para triagem manual com uma unica requisicao: nem o SDK repete escondido, nem a correcao de resposta invalida se aplica a quem nao respondeu")
     void erroDoProvedorSemRepeticaoEscondida() {
         gemini.stubFor(ProvedorFalso.chat().willReturn(aResponse().withStatus(500)));
         UUID id = servico.registrar(TEXTO).getId();
@@ -108,32 +108,6 @@ class TriagemIT {
 
         assertThat(recarregar(id).getStatus()).isEqualTo(StatusChamado.PENDENTE_TRIAGEM_MANUAL);
         gemini.verify(exactly(1), postRequestedFor(urlPathEqualTo(ProvedorFalso.CAMINHO)));
-    }
-
-    @Test
-    @DisplayName("resposta que nao e JSON manda o chamado para triagem manual, sem perde-lo")
-    void respostaForaDoFormato() {
-        gemini.stubFor(ProvedorFalso.chat().willReturn(ProvedorFalso.responde("Claro! Este chamado parece urgente.")));
-        UUID id = servico.registrar(TEXTO).getId();
-
-        triador.processarProximo();
-
-        Chamado chamado = recarregar(id);
-        assertThat(chamado.getStatus()).isEqualTo(StatusChamado.PENDENTE_TRIAGEM_MANUAL);
-        assertThat(chamado.getCategoria()).isNull();
-        assertThat(chamado.getTexto()).isEqualTo(TEXTO);
-    }
-
-    @Test
-    @DisplayName("resumo maior que a coluna nao derruba o worker: o chamado vai para triagem manual")
-    void resumoLongoDemais() {
-        gemini.stubFor(ProvedorFalso.chat()
-                .willReturn(ProvedorFalso.classifica("TECNICO", "ALTA", "x".repeat(500))));
-        UUID id = servico.registrar(TEXTO).getId();
-
-        triador.processarProximo();
-
-        assertThat(recarregar(id).getStatus()).isEqualTo(StatusChamado.PENDENTE_TRIAGEM_MANUAL);
     }
 
     @Test

@@ -1,7 +1,12 @@
 package com.joaoalcantara.triagem.provedor;
 
-import org.springframework.ai.chat.client.AdvisorParams;
+import java.util.List;
+import java.util.function.Supplier;
+
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 
@@ -16,6 +21,17 @@ import com.joaoalcantara.triagem.chamado.Classificacao;
  * formato de resposta.</p>
  */
 public class ProvedorCompativelComOpenAi implements ProvedorDeIa {
+
+    /**
+     * Esquema JSON de {@link Classificacao}, enviado em toda requisicao no campo
+     * {@code response_format}: saida estruturada nativa, em que o provedor
+     * restringe a geracao ao esquema.
+     *
+     * <p>A alternativa — so descrever o formato no texto do prompt — funciona em
+     * qualquer modelo, mas deixa o formato a cargo da boa vontade do modelo.
+     * Nenhuma das duas dispensa validar a resposta.</p>
+     */
+    private static final String ESQUEMA = new BeanOutputConverter<>(Classificacao.class).getJsonSchema();
 
     private final String nome;
     private final ChatClient cliente;
@@ -38,6 +54,7 @@ public class ProvedorCompativelComOpenAi implements ProvedorDeIa {
                 // da biblioteca. Repeticao invisivel e o defeito 3 do problema
                 // central.
                 .maxRetries(0)
+                .outputSchema(ESQUEMA)
                 .build();
 
         this.cliente = ChatClient.create(OpenAiChatModel.builder().options(opcoes).build());
@@ -49,23 +66,40 @@ public class ProvedorCompativelComOpenAi implements ProvedorDeIa {
     }
 
     /**
-     * Pede a classificacao com saida estruturada nativa: o esquema JSON de
-     * {@link Classificacao} vai no campo {@code response_format} da requisicao,
-     * e o provedor restringe a geracao a ele.
-     *
-     * <p>A alternativa — so descrever o formato no texto do prompt — funciona em
-     * qualquer modelo, mas deixa o formato a cargo da boa vontade do modelo.
-     * Nenhuma das duas dispensa validar a resposta.</p>
+     * Devolve o texto da resposta, sem converter: com {@code entity(...)}, uma
+     * categoria inventada viraria uma excecao do Jackson, indistinguivel de
+     * qualquer outra falha — e a triagem precisa saber exatamente o que estava
+     * errado para pedir a correcao.
      */
     @Override
-    public Classificacao classificar(String texto) {
+    public String classificar(String texto) {
+        return chamar(() -> cliente.prompt()
+                .system(InstrucoesDeTriagem.SISTEMA)
+                .user(InstrucoesDeTriagem.mensagemDoUsuario(texto))
+                .call()
+                .content());
+    }
+
+    /**
+     * Continua a conversa: o pedido original, a resposta recusada como fala do
+     * proprio modelo, e os motivos da recusa. Ver o que respondeu e por que nao
+     * serviu da ao modelo mais chance de acertar do que repetir o pedido do zero.
+     */
+    @Override
+    public String corrigir(String texto, String respostaAnterior, List<String> erros) {
+        return chamar(() -> cliente.prompt()
+                .system(InstrucoesDeTriagem.SISTEMA)
+                .messages(
+                        new UserMessage(InstrucoesDeTriagem.mensagemDoUsuario(texto)),
+                        new AssistantMessage(InstrucoesDeTriagem.respostaAnterior(respostaAnterior)),
+                        new UserMessage(InstrucoesDeTriagem.mensagemDeCorrecao(erros)))
+                .call()
+                .content());
+    }
+
+    private String chamar(Supplier<String> chamada) {
         try {
-            return cliente.prompt()
-                    .advisors(AdvisorParams.ENABLE_NATIVE_STRUCTURED_OUTPUT)
-                    .system(InstrucoesDeTriagem.SISTEMA)
-                    .user(InstrucoesDeTriagem.mensagemDoUsuario(texto))
-                    .call()
-                    .entity(Classificacao.class);
+            return chamada.get();
         } catch (RuntimeException e) {
             throw new FalhaNoProvedorException(nome, e);
         }
