@@ -4,12 +4,25 @@ API REST que recebe chamados de suporte em texto livre e usa um modelo de lingua
 
 O que este projeto resolve não é o prompt. É a engenharia de backend em volta de uma dependência que **demora, falha, cobra por uso e às vezes responde algo fora do combinado**.
 
-> **Status:** em construção — Etapa 10 de 13. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 11 de 13. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+
+---
+
+## No ar
+
+**<https://triagem-chamados-yh4a.onrender.com>**
+
+[Demonstração ao vivo](https://triagem-chamados-yh4a.onrender.com) · [Health](https://triagem-chamados-yh4a.onrender.com/actuator/health) · [Métricas](https://triagem-chamados-yh4a.onrender.com/actuator/prometheus)
+
+A raiz traz uma página que abre um chamado **ao vivo**: ela mostra o `POST` respondendo em milissegundos com `202`, enquanto a triagem acontece depois, num worker — e, quando ela termina, qual provedor respondeu, se houve fallback, se a classificação veio do cache e quanto cada etapa levou. Não cole dados pessoais: o texto vai para provedores de IA em plano gratuito.
+
+O serviço roda no plano gratuito do Render e hiberna quando ocioso: a primeira requisição depois de um tempo parado leva cerca de um minuto para responder — as seguintes são imediatas.
 
 ---
 
 ## Sumário
 
+- [No ar](#no-ar)
 - [O problema central](#o-problema-central)
 - [Decisões técnicas](#decisões-técnicas)
 - [API](#api)
@@ -178,7 +191,14 @@ O contador fica no banco, e a reserva é uma única instrução que só incremen
 
 Cada chamado registrado vira pelo menos uma requisição a um provedor, e a cota diária é compartilhada por todos os visitantes da demonstração: sem limite, um único script a esgotaria em minutos. O cache não protege disso, porque basta variar o texto. São **10 chamados por hora por endereço IP**; passado o limite, `429` em Problem Details com `Retry-After` — o mesmo cabeçalho que a aplicação respeita quando vem do provedor, agora dizendo ao cliente quando a janela vira.
 
-- **Qual IP.** Atrás de um proxy, como o do Render, o endereço da conexão é o do proxy, e o do cliente vem no `X-Forwarded-For`. O primeiro endereço desse cabeçalho, o que quase todo exemplo usa, é justamente o que o cliente controla: trocando-o a cada requisição, o limite deixaria de valer. Confiável é só o que os nossos proxies escreveram, contando de trás para frente — um, no Render. Um teste confere que o endereço forjado é ignorado.
+- **Qual IP — medido, não suposto.** Atrás de proxies, como os do Render, o endereço da conexão é o de um proxy, e o do cliente vem num cabeçalho. No `X-Forwarded-For`, o primeiro endereço, o que quase todo exemplo usa, é justamente o que o cliente controla: trocando-o a cada requisição, o limite deixaria de valer. Confiável é só o que a infraestrutura escreveu. Como o Render não documenta o próprio comportamento, e relatos da comunidade divergem sobre quantos proxies ficam na frente, a aplicação ganhou um log de diagnóstico que registra só o *formato* dos cabeçalhos de origem — quantos endereços, quais cabeçalhos —, nunca os IPs. Em produção, ele mostrou:
+
+  | Requisição | `X-Forwarded-For` | `True-Client-IP` | `CF-Connecting-IP` |
+  |---|---|---|---|
+  | normal | 1 endereço | presente | presente |
+  | com `X-Forwarded-For` forjado | 2 endereços | presente | presente |
+
+  A Cloudflare fica na frente do Render e **sobrescreve** o `True-Client-IP`, descartando o valor que o cliente mandar; o Render **acrescenta** um endereço ao `X-Forwarded-For`, mantendo o que o cliente mandou. A configuração usa o `True-Client-IP` e, na falta dele, o último endereço do `X-Forwarded-For`. A prova em produção: dez `POST`s com `X-Forwarded-For` e `True-Client-IP` forjados e diferentes a cada vez, e o 11º recebeu `429` — a identificação não mudou. (Forjar o `CF-Connecting-IP` nem chega à aplicação: a Cloudflare responde `403`.) Os testes automatizados cobrem as duas regras, inclusive o endereço forjado à esquerda sendo ignorado.
 - **Janela fixa de uma hora**, contada no banco com um `INSERT ... ON CONFLICT ... RETURNING` atômico, sem corrida entre requisições nem entre instâncias. Ela permite até o dobro do limite na virada da hora; uma janela deslizante evitaria isso guardando o horário de cada chamado. Para proteger cota, o dobro ocasional é aceitável.
 - **O IP não é guardado**, só o hash dele, e as janelas encerradas são apagadas por uma limpeza periódica junto com o cache vencido e os contadores de dias passados.
 - **Corpo inválido não gasta o limite**: é recusado pela validação antes de chegar à contagem.
@@ -316,6 +336,8 @@ As chaves dos provedores de IA entram só por variável de ambiente: um arquivo 
 - **Cabe no plano gratuito.** Com limite de 512 MB e o perfil de produção, a aplicação subiu em cerca de 7 segundos e ficou em 286 MB depois de triar chamados e servir métricas.
 
 A instância gratuita hiberna depois de 15 minutos sem tráfego, e com ela o worker e o revisor de pendentes. Nada se perde: os chamados ficam no banco, e a primeira visita acorda a instância, que volta a processar a fila.
+
+Em produção, o custo da instância gratuita aparece na primeira triagem: logo depois do deploy, a primeira requisição ao Gemini levou **19,4 segundos** — carregamento das classes do Spring AI e do SDK e o primeiro handshake TLS, numa CPU reduzida. A seguinte, com a aplicação aquecida, levou **0,8 segundo**. As métricas por provedor separam os dois casos, e o tempo limite e o fallback cobrem o pior deles.
 
 ### A aplicação sobe sem chave de provedor
 
@@ -521,7 +543,7 @@ Java 21 · Spring Boot 4 · Spring AI · Google Gemini · Groq · PostgreSQL · 
 - [x] **Etapa 8** — Controle de custo: cache por texto normalizado, limite por cliente e orçamento diário
 - [x] **Etapa 9** — Métricas por provedor com Micrometer e Prometheus
 - [x] **Etapa 10** — Página de demonstração
-- [ ] **Etapa 11** — Dockerfile, CI no GitHub Actions e deploy no Render
+- [x] **Etapa 11** — Dockerfile, CI no GitHub Actions e deploy no Render
 - [ ] **Etapa 12** — README final
 - [ ] **Etapa 13** — Divulgação
 
