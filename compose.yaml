@@ -1,0 +1,22 @@
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: triagem-db
+    environment:
+      POSTGRES_DB: triagem
+      POSTGRES_USER: triagem
+      POSTGRES_PASSWORD: triagem
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - "5432:5432"
+    volumes:
+      - triagem-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U triagem -d triagem"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  triagem-db-data:

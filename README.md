@@ -4,7 +4,7 @@ API REST que recebe chamados de suporte em texto livre e usa um modelo de lingua
 
 O que este projeto resolve não é o prompt. É a engenharia de backend em volta de uma dependência que **demora, falha, cobra por uso e às vezes responde algo fora do combinado**.
 
-> **Status:** em construção — Etapa 0 de 13. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 1 de 13. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -12,6 +12,7 @@ O que este projeto resolve não é o prompt. É a engenharia de backend em volta
 
 - [O problema central](#o-problema-central)
 - [Decisões técnicas](#decisões-técnicas)
+- [Como rodar](#como-rodar)
 - [Testes planejados](#testes-planejados)
 - [Stack](#stack)
 - [Roadmap](#roadmap)
@@ -57,6 +58,60 @@ Esta seção cresce a cada etapa. Cada entrada registra a escolha, o motivo e a 
 
 As chaves dos provedores de IA entram só por variável de ambiente: um arquivo `.env` local, fora do Git, e o painel da plataforma de deploy. O CI não precisa de chave nenhuma, porque nenhum teste automatizado chama um provedor real — um servidor simulado faz esse papel.
 
+### Cada dependência entra na etapa em que é usada
+
+O scaffold não traz Spring AI nem Resilience4j. O starter do Spring AI exige a chave do provedor para o contexto subir; adicioná-lo antes de existir código que o use faria a aplicação — e o teste de contexto no CI — depender de um segredo sem motivo. O `ContextoDaAplicacaoIT` guarda essa regra: ele sobe a aplicação sem chave nenhuma e quebra no dia em que alguma dependência passar a exigir uma.
+
+### O schema pertence ao Flyway, não ao Hibernate
+
+`spring.jpa.hibernate.ddl-auto=validate`: o Hibernate confere se o mapeamento bate com as tabelas e recusa subir se não bater, mas não cria nem altera nada. Com `update`, o schema vira consequência do código e o banco de produção passa a ter a forma que o Hibernate decidiu, sem registro de quando cada coluna nasceu. Toda mudança de schema passa por um arquivo versionado em `db/migration`.
+
+### UTC de ponta a ponta
+
+O Jackson serializa em UTC e o Hibernate lê e grava `TIMESTAMPTZ` em UTC (`hibernate.jdbc.time_zone`), independente do fuso da máquina. Sem a configuração do Hibernate, ele converte pelo fuso da JVM, e o mesmo instante seria gravado de um jeito no notebook e de outro no servidor.
+
+### Testes unitários e de integração separados por plugin
+
+O Surefire roda `*Test` (unitários, sem dependência externa) e o Failsafe roda `*IT` (integração, exigem Docker). `mvnw test` continua rápido o suficiente para rodar a cada alteração; `mvnw verify` roda a suíte inteira.
+
+### PostgreSQL de verdade nos testes
+
+Os testes de integração sobem o PostgreSQL em contêiner com Testcontainers, na mesma imagem do `compose.yaml`, com `@ServiceConnection` injetando as credenciais no Spring. Um banco em memória não serviria: a fila de triagem vai depender de `SELECT ... FOR UPDATE SKIP LOCKED`, e o teste com duas instâncias do worker só prova algo se o lock se comportar como no PostgreSQL de produção.
+
+---
+
+## Como rodar
+
+Pré-requisitos: Java 21 e Docker. O Maven não precisa estar instalado — o wrapper (`mvnw`) baixa a versão certa.
+
+```bash
+cp .env.example .env
+docker compose up -d
+./mvnw spring-boot:run
+```
+
+No Windows, use `mvnw.cmd` no lugar de `./mvnw`.
+
+A aplicação sobe em <http://localhost:8080>.
+
+```bash
+curl http://localhost:8080/actuator/health
+```
+
+O `health` agrega o estado do banco: se o PostgreSQL estiver fora, a resposta é `DOWN`.
+
+### Sem Docker Compose
+
+Pela IDE, a classe `TestTriagemApplication` sobe a aplicação com um PostgreSQL descartável via Testcontainers — o banco nasce com o processo e morre junto, e cada execução começa limpa.
+
+### Testes
+
+```bash
+./mvnw verify
+```
+
+Roda os unitários e os de integração. Os de integração exigem Docker em execução.
+
 ---
 
 ## Testes planejados
@@ -84,7 +139,7 @@ Java 21 · Spring Boot 4 · Spring AI · Google Gemini · Groq · PostgreSQL · 
 ## Roadmap
 
 - [x] **Etapa 0** — Repositório: README, `.gitignore`, licença e primeiro commit
-- [ ] **Etapa 1** — Scaffold Spring Boot, Actuator, Docker Compose com PostgreSQL e estrutura de pacotes
+- [x] **Etapa 1** — Scaffold Spring Boot, Actuator, Docker Compose com PostgreSQL e estrutura de pacotes
 - [ ] **Etapa 2** — Domínio sem IA: `Chamado`, estados, Flyway, `POST` (202) e `GET`, Problem Details
 - [ ] **Etapa 3** — Primeiro provedor (Gemini) com saída estruturada e worker assíncrono com `SKIP LOCKED`
 - [ ] **Etapa 4** — Validação da saída do modelo, com uma nova tentativa informando o erro
