@@ -34,7 +34,19 @@ public class TriadorDeChamados {
      * @return {@code false} quando a fila estava vazia
      */
     public boolean processarProximo() {
-        Optional<ChamadoReservado> reservado = fila.reservarProximo();
+        return processar(fila.reservarProximo());
+    }
+
+    /**
+     * Revisa o proximo pendente cuja nova tentativa automatica ja chegou.
+     *
+     * @return {@code false} quando nenhum pendente estava na hora
+     */
+    public boolean processarProximoPendente() {
+        return processar(fila.reservarProximoPendente());
+    }
+
+    private boolean processar(Optional<ChamadoReservado> reservado) {
         if (reservado.isEmpty()) {
             return false;
         }
@@ -43,15 +55,15 @@ public class TriadorDeChamados {
     }
 
     /**
-     * Qualquer falha manda o chamado para triagem manual, e nunca o deixa
-     * {@code RECEBIDO}. Deixa-lo na fila parece mais generoso, mas um chamado
-     * que sempre falha — texto que o modelo nao consegue classificar, chave
-     * invalida — seria pego de novo a cada vencimento da reserva, para sempre,
-     * gastando cota a cada volta.
+     * Qualquer falha deixa o chamado pendente, e nunca o devolve a fila de
+     * {@code RECEBIDO}. Devolve-lo parece mais generoso, mas um chamado que
+     * sempre falha — texto que o modelo nao consegue classificar, cota do dia
+     * esgotada — seria pego de novo a cada volta do worker, para sempre,
+     * gastando cota a cada tentativa. A segunda chance existe, mas agendada e
+     * com espera crescente: e o revisor de pendentes que a da.
      *
      * <p>Chegar aqui com falha ja significa muito: cada provedor da cadeia teve
-     * as suas novas tentativas e a correcao de resposta invalida. O job que
-     * revisita os pendentes mais tarde vem na Etapa 7.</p>
+     * as suas novas tentativas e a correcao de resposta invalida.</p>
      *
      * <p>O texto do chamado nunca vai para o log: pode conter dados pessoais.</p>
      */
@@ -66,14 +78,14 @@ public class TriadorDeChamados {
                 log.info("Chamado {} triado por {}", chamado.id(), triagem.provedor());
             }
         } catch (TodosOsProvedoresFalharamException e) {
-            log.warn("Chamado {} vai para triagem manual: {}", chamado.id(), e.getMessage());
-            fila.encaminharParaTriagemManual(chamado.id());
+            log.warn("Chamado {} fica pendente: {}", chamado.id(), e.getMessage());
+            fila.registrarFalhaDaTriagem(chamado.id());
         } catch (RuntimeException e) {
             // Classificacao validada que mesmo assim nao coube no banco. Nao deveria
             // acontecer — o validador e as restricoes do banco usam os mesmos
             // limites —, mas, se acontecer, o chamado nao pode ficar preso na fila.
-            log.error("Chamado {} vai para triagem manual: falha ao gravar a triagem", chamado.id(), e);
-            fila.encaminharParaTriagemManual(chamado.id());
+            log.error("Chamado {} fica pendente: falha ao gravar a triagem", chamado.id(), e);
+            fila.registrarFalhaDaTriagem(chamado.id());
         }
     }
 }

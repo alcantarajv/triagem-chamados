@@ -35,11 +35,14 @@ public class FilaDeTriagem {
 
     private final ChamadoRepositorio repositorio;
     private final PropriedadesDoWorker propriedades;
+    private final PropriedadesDaRevisao revisao;
     private final Clock relogio;
 
-    public FilaDeTriagem(ChamadoRepositorio repositorio, PropriedadesDoWorker propriedades, Clock relogio) {
+    public FilaDeTriagem(ChamadoRepositorio repositorio, PropriedadesDoWorker propriedades,
+                         PropriedadesDaRevisao revisao, Clock relogio) {
         this.repositorio = repositorio;
         this.propriedades = propriedades;
+        this.revisao = revisao;
         this.relogio = relogio;
     }
 
@@ -57,10 +60,22 @@ public class FilaDeTriagem {
     @Transactional
     public Optional<ChamadoReservado> reservarProximo() {
         Instant agora = relogio.instant();
-        return repositorio.buscarProximoParaTriagem(agora).map(chamado -> {
-            chamado.reservarAte(agora.plus(propriedades.reserva()));
-            return new ChamadoReservado(chamado.getId(), chamado.getTexto());
-        });
+        return repositorio.buscarProximoParaTriagem(agora).map(chamado -> reservar(chamado, agora));
+    }
+
+    /**
+     * Reserva o proximo pendente cuja nova tentativa automatica ja chegou, se
+     * houver. A partir dai ele segue o mesmo caminho de um chamado novo.
+     */
+    @Transactional
+    public Optional<ChamadoReservado> reservarProximoPendente() {
+        Instant agora = relogio.instant();
+        return repositorio.buscarProximoParaRevisao(agora).map(chamado -> reservar(chamado, agora));
+    }
+
+    private ChamadoReservado reservar(Chamado chamado, Instant agora) {
+        chamado.reservarAte(agora.plus(propriedades.reserva()));
+        return new ChamadoReservado(chamado.getId(), chamado.getTexto());
     }
 
     @Transactional
@@ -72,13 +87,14 @@ public class FilaDeTriagem {
         chamado.registrarTriagem(classificacao, provedor, relogio.instant());
     }
 
+    /** A rodada falhou: o chamado fica pendente, com ou sem nova tentativa agendada. */
     @Transactional
-    public void encaminharParaTriagemManual(UUID id) {
+    public void registrarFalhaDaTriagem(UUID id) {
         Chamado chamado = repositorio.buscarParaAtualizar(id).orElseThrow();
         if (!aindaEsperaTriagem(chamado)) {
             return;
         }
-        chamado.encaminharParaTriagemManual();
+        chamado.registrarFalhaDaTriagem(relogio.instant(), revisao.esperas());
     }
 
     /**
@@ -87,7 +103,7 @@ public class FilaDeTriagem {
      * duas gravacoes, e a segunda encontra o trabalho feito e desiste.
      */
     private boolean aindaEsperaTriagem(Chamado chamado) {
-        if (chamado.getStatus() != StatusChamado.RECEBIDO) {
+        if (chamado.getStatus() == StatusChamado.TRIADO) {
             log.info("Chamado {} ja esta {}; resultado descartado", chamado.getId(), chamado.getStatus());
             return false;
         }

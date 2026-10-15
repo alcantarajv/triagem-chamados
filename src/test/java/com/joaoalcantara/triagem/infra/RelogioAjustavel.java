@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.springframework.boot.test.context.TestConfiguration;
@@ -28,7 +29,10 @@ public class RelogioAjustavel {
     @Bean
     @Primary
     ClockMovel relogioAjustavel() {
-        return new ClockMovel(Instant.now());
+        // Truncado em microssegundos, a precisao do TIMESTAMPTZ: sem isso, um
+        // instante gravado e relido do banco volta arredondado e deixa de ser
+        // igual ao que o teste calculou.
+        return new ClockMovel(Instant.now().truncatedTo(ChronoUnit.MICROS));
     }
 
     /** Permite avancar o tempo sem trocar a instancia injetada nos beans. */

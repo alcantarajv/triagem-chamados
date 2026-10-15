@@ -4,7 +4,7 @@ API REST que recebe chamados de suporte em texto livre e usa um modelo de lingua
 
 O que este projeto resolve não é o prompt. É a engenharia de backend em volta de uma dependência que **demora, falha, cobra por uso e às vezes responde algo fora do combinado**.
 
-> **Status:** em construção — Etapa 6 de 13. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 7 de 13. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -86,18 +86,33 @@ Um worker agendado procura o chamado `RECEBIDO` mais antigo com `SELECT ... FOR 
 O detalhe que importa é **onde a chamada ao provedor acontece**. O jeito óbvio — travar a linha, chamar o modelo e gravar o resultado na mesma transação — segura uma conexão do pool durante os segundos que o modelo leva para responder. Com o provedor lento, o pool se esgota e até o `POST` de chamados para: a lentidão da IA vira a lentidão da API pelo caminho dos fundos. Por isso o worker faz três transações curtas:
 
 ```
-1. reserva     SELECT ... FOR UPDATE SKIP LOCKED  →  reservado_ate = agora + 2 min  →  COMMIT
+1. reserva     SELECT ... FOR UPDATE SKIP LOCKED  →  reservado_ate = agora + 5 min  →  COMMIT
 2. provedor    chamada HTTP, sem transação e sem conexão do banco
 3. resultado   SELECT ... FOR UPDATE  →  TRIADO (ou PENDENTE_TRIAGEM_MANUAL)  →  COMMIT
 ```
 
 Entre a 1 e a 3, quem protege o chamado não é o lock, é a **reserva** gravada nele: enquanto ela vale, nenhum outro worker o pega. Se o worker morrer no meio, a reserva vence sozinha e o chamado volta para a fila — sem job de limpeza e sem chamado preso. Se a reserva vencer com a chamada ainda em andamento, o lock da etapa 3 serializa as duas gravações e a segunda encontra o trabalho feito.
 
-Os testes comprovam as três partes: quatro workers simultâneos sobre 30 chamados resultam em exatamente 30 requisições ao provedor, uma por texto, com todos os workers trabalhando; um chamado reservado não é entregue de novo antes do prazo; e volta para a fila quando o prazo vence (com um `Clock` que o teste avança, sem esperar dois minutos de verdade).
+Os testes comprovam as três partes: quatro workers simultâneos sobre 30 chamados resultam em exatamente 30 requisições ao provedor, uma por texto, com todos os workers trabalhando; um chamado reservado não é entregue de novo antes do prazo; e volta para a fila quando o prazo vence (com um `Clock` que o teste avança, sem esperar a reserva inteira de verdade).
 
-### Falha vai para triagem manual, nunca de volta para a fila
+### Falha vira pendente com nova tentativa agendada, nunca volta para a fila
 
-Quando a triagem automática não dá certo, o chamado vai para `PENDENTE_TRIAGEM_MANUAL`. Devolvê-lo à fila parece mais generoso, mas um chamado que sempre falha seria pego de novo a cada volta do worker, para sempre, gastando cota a cada tentativa. As segundas chances existem, mas com critério e antes de desistir: a correção de resposta inválida, a repetição de erros transitórios e o segundo provedor, descritos abaixo. Só depois de todos falharem o chamado vai para triagem manual; o job que revisita os pendentes mais tarde vem na Etapa 7.
+Dentro de uma rodada de triagem, as segundas chances são imediatas: a correção de resposta inválida, a repetição de erros transitórios e o segundo provedor, descritos abaixo. Quando a rodada inteira falha — todos os provedores fora, ou a cota do dia esgotada —, o chamado vai para `PENDENTE_TRIAGEM_MANUAL`.
+
+Devolvê-lo à fila de `RECEBIDO` parece mais generoso, mas o que derruba uma rodada inteira não passa em segundos: o chamado seria pego de novo a cada volta do worker, gastando a cota que sobrou. Em vez disso, ele **ganha uma nova tentativa agendada**, com espera crescente, e um **revisor de pendentes** separado do worker o retoma na hora marcada:
+
+| Falha da rodada | Próxima tentativa automática |
+|---|---|
+| 1ª | 5 minutos depois |
+| 2ª | 30 minutos depois |
+| 3ª | 2 horas depois |
+| 4ª | nenhuma: o chamado espera uma pessoa |
+
+Depois da quarta, a triagem automática desiste de vez, em vez de revisitar o chamado para sempre. O revisor usa a mesma técnica do worker — `SKIP LOCKED` e reserva gravada no chamado —, atende primeiro o pendente mais atrasado e roda com intervalo próprio, de um minuto: um pendente já esperou minutos por definição, e a fila de chamados novos nunca espera atrás de uma revisão. O pendente não volta a `RECEBIDO`, e o grafo de estados continua o mesmo; o que muda é só o agendamento gravado no próprio chamado.
+
+A API mostra o agendamento no campo `proximaTentativaAutomatica`: com ele preenchido, o cliente sabe quando olhar de novo; com o pendente sem ele, sabe que o chamado espera uma pessoa.
+
+A migração que criou o agendamento também agendou uma revisão para os pendentes que já existiam, em vez de deixá-los esquecidos. No banco local, dois chamados pendentes havia três horas foram triados pelo Gemini assim que a aplicação subiu com a migração. E a degradação foi conferida com os provedores reais: com os dois inalcançáveis, o `POST` respondeu `202` em 90ms e o `GET` mostrou o chamado pendente com a próxima tentativa agendada; com os dois de volta, o revisor o retomou e o Gemini o triou.
 
 ### Um cliente compatível com a OpenAI para os dois provedores
 
@@ -273,7 +288,8 @@ Content-Type: application/json
   "texto": "Nao consigo emitir a segunda via do boleto pelo aplicativo.",
   "status": "RECEBIDO",
   "criadoEm": "2026-10-15T15:03:40.246298Z",
-  "triagem": null
+  "triagem": null,
+  "proximaTentativaAutomatica": null
 }
 ```
 
@@ -291,11 +307,25 @@ Depois que o worker triar o chamado, o `GET` traz a classificação. Resposta re
     "resumo": "Impossibilidade de emissao de segunda via de boleto no aplicativo.",
     "provedor": "gemini",
     "triadoEm": "2026-10-15T15:37:33.418883Z"
-  }
+  },
+  "proximaTentativaAutomatica": null
 }
 ```
 
-Se a triagem automática falhar, o status vira `PENDENTE_TRIAGEM_MANUAL` e `triagem` continua `null`.
+Se a rodada inteira de triagem falhar, o status vira `PENDENTE_TRIAGEM_MANUAL`, `triagem` continua `null` e `proximaTentativaAutomatica` diz quando o revisor tenta de novo. Resposta real, com os dois provedores inalcançáveis (esperas encurtadas para a demonstração):
+
+```json
+{
+  "id": "01a140bf-006c-7adb-9013-2f860693db61",
+  "texto": "A impressora fiscal parou de emitir cupons em todas as lojas.",
+  "status": "PENDENTE_TRIAGEM_MANUAL",
+  "criadoEm": "2026-10-15T18:07:01.727602Z",
+  "triagem": null,
+  "proximaTentativaAutomatica": "2026-10-15T18:07:28.604366Z"
+}
+```
+
+Pendente com `proximaTentativaAutomatica: null` esgotou as tentativas automáticas e espera uma pessoa.
 
 Erro de validação:
 
@@ -356,7 +386,6 @@ Os testes são a prova do argumento central. O WireMock faz o papel dos provedor
 | Cenário simulado | O que o teste comprova | Situação |
 |---|---|---|
 | Vários workers ao mesmo tempo | cada chamado é triado uma única vez, com uma requisição por texto | comprovado (`TriagemConcorrenteIT`) |
-| Provedor responde `500` | o chamado vai para triagem manual com uma única requisição, sem repetição escondida | comprovado (`TriagemIT`) |
 | Provedor demora mais que o tempo limite | a chamada é abandonada no tempo limite e a nova tentativa resolve; sempre lento, três tentativas e triagem manual | comprovado (`RepeticaoIT`) |
 | Provedor responde `5xx` ou `408` | nova tentativa com espera crescente; três falhas, exatamente três requisições | comprovado (`RepeticaoIT`) |
 | Provedor responde `4xx` de requisição inválida | uma única requisição, sem repetição | comprovado (`RepeticaoIT`) |
@@ -364,7 +393,9 @@ Os testes são a prova do argumento central. O WireMock faz o papel dos provedor
 | Principal lento, com cota esgotada, fora do ar ou com a chave recusada | o secundário responde e o chamado fica triado | comprovado (`FallbackIT`) |
 | Provedor responde JSON inválido ou categoria inexistente | há exatamente uma nova tentativa, com o erro no pedido; se continuar inválido, triagem manual, sem terceira chamada | comprovado (`ValidacaoDaRespostaIT`) |
 | Principal continua inválido depois da correção | o próximo provedor é consultado, com o pedido original | comprovado (`FallbackIT`) |
-| Todos os provedores fora | o chamado fica pendente de triagem manual e a API não responde 500 | Etapa 7 |
+| Todos os provedores fora | a API registra (`202`) e consulta (`200`) normalmente, o chamado fica pendente com o texto intacto e a próxima tentativa agendada | comprovado (`DegradacaoIT`) |
+| Pendente com os provedores de volta | o revisor retoma o chamado na hora marcada, e não antes, e ele fica triado | comprovado (`DegradacaoIT`) |
+| Pendente que continua falhando | as revisões se espaçam (5min, 30min, 2h) e, depois da quarta falha, nenhuma requisição a mais | comprovado (`DegradacaoIT`) |
 | Cinco falhas seguidas no principal | o circuito abre e o principal recebe zero requisições durante a janela; depois dela, uma única chamada de teste fecha ou reabre o circuito | comprovado (`DisjuntorIT`) |
 | O mesmo texto enviado duas vezes | a segunda triagem vem do cache, sem chamar o provedor | Etapa 8 |
 
@@ -385,7 +416,7 @@ Java 21 · Spring Boot 4 · Spring AI · Google Gemini · Groq · PostgreSQL · 
 - [x] **Etapa 4** — Validação da saída do modelo, com uma nova tentativa informando o erro
 - [x] **Etapa 5** — Tempo limite e nova tentativa só para erros transitórios, respeitando o `Retry-After`
 - [x] **Etapa 6** — Segundo provedor (Groq), cadeia de fallback e circuit breaker por provedor
-- [ ] **Etapa 7** — Degradação: triagem manual quando todos os provedores falham e job de nova tentativa
+- [x] **Etapa 7** — Degradação: triagem manual quando todos os provedores falham e job de nova tentativa
 - [ ] **Etapa 8** — Controle de custo: cache por texto normalizado, limite por cliente e orçamento diário
 - [ ] **Etapa 9** — Métricas por provedor com Micrometer e Prometheus
 - [ ] **Etapa 10** — Página de demonstração

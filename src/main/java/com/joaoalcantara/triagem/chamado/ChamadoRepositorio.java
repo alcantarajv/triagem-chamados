@@ -35,6 +35,22 @@ public interface ChamadoRepositorio extends JpaRepository<Chamado, UUID> {
             """, nativeQuery = true)
     Optional<Chamado> buscarProximoParaTriagem(Instant agora);
 
+    /**
+     * O pendente mais atrasado cuja nova tentativa automatica ja chegou, ja
+     * travado para esta transacao. Mesma tecnica da fila de triagem: o
+     * {@code SKIP LOCKED} e a reserva gravada no chamado.
+     */
+    @Query(value = """
+            SELECT * FROM chamados
+            WHERE status = 'PENDENTE_TRIAGEM_MANUAL'
+              AND proxima_tentativa_em <= :agora
+              AND (reservado_ate IS NULL OR reservado_ate < :agora)
+            ORDER BY proxima_tentativa_em
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+            """, nativeQuery = true)
+    Optional<Chamado> buscarProximoParaRevisao(Instant agora);
+
     /** Le o chamado travando a linha, para gravar o resultado sem corrida. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT c FROM Chamado c WHERE c.id = :id")

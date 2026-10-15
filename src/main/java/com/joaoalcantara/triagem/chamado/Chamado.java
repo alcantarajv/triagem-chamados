@@ -1,6 +1,8 @@
 package com.joaoalcantara.triagem.chamado;
 
+import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -82,6 +84,18 @@ public class Chamado {
     @Column(name = "reservado_ate")
     private Instant reservadoAte;
 
+    /** Rodadas de triagem automatica que ja falharam para este chamado. */
+    @Column(name = "falhas_de_triagem", nullable = false)
+    private int falhasDeTriagem;
+
+    /**
+     * Quando o revisor de pendentes tenta de novo. Nula quando nao ha tentativa
+     * agendada: chamado que nao esta pendente, ou pendente que ja esgotou as
+     * tentativas automaticas e espera so uma pessoa.
+     */
+    @Column(name = "proxima_tentativa_em")
+    private Instant proximaTentativaEm;
+
     protected Chamado() {
         // exigido pelo JPA
     }
@@ -105,11 +119,32 @@ public class Chamado {
         this.provedor = Objects.requireNonNull(provedor, "provedor");
         this.triadoEm = Objects.requireNonNull(agora, "agora");
         this.reservadoAte = null;
+        this.proximaTentativaEm = null;
     }
 
-    /** A triagem automatica nao deu certo: o chamado espera uma pessoa ou nova tentativa. */
-    public void encaminharParaTriagemManual() {
-        mudarPara(StatusChamado.PENDENTE_TRIAGEM_MANUAL);
+    /**
+     * Uma rodada de triagem automatica falhou: o chamado fica pendente e, se
+     * ainda houver espera na lista, ganha a proxima tentativa agendada.
+     *
+     * <p>A espera cresce a cada falha. O motivo mais comum de uma rodada inteira
+     * falhar — todos os provedores fora, ou a cota do dia esgotada — nao passa em
+     * segundos; tentar de novo logo so gastaria a cota que sobrou. Esgotada a
+     * lista, a triagem automatica desiste de vez e o chamado espera uma pessoa,
+     * em vez de ficar sendo revisitado para sempre.</p>
+     *
+     * @param esperas espera antes de cada nova tentativa: a primeira depois da
+     *                primeira falha, a segunda depois da segunda, e assim por diante
+     */
+    public void registrarFalhaDaTriagem(Instant agora, List<Duration> esperas) {
+        if (status == StatusChamado.RECEBIDO) {
+            mudarPara(StatusChamado.PENDENTE_TRIAGEM_MANUAL);
+        } else if (status != StatusChamado.PENDENTE_TRIAGEM_MANUAL) {
+            throw new TransicaoInvalidaException(id, status, StatusChamado.PENDENTE_TRIAGEM_MANUAL);
+        }
+        this.falhasDeTriagem++;
+        this.proximaTentativaEm = falhasDeTriagem <= esperas.size()
+                ? agora.plus(esperas.get(falhasDeTriagem - 1))
+                : null;
         this.reservadoAte = null;
     }
 
@@ -158,5 +193,13 @@ public class Chamado {
 
     public Instant getReservadoAte() {
         return reservadoAte;
+    }
+
+    public int getFalhasDeTriagem() {
+        return falhasDeTriagem;
+    }
+
+    public Instant getProximaTentativaEm() {
+        return proximaTentativaEm;
     }
 }

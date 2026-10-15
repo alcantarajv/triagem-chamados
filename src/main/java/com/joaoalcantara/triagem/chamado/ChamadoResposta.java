@@ -9,13 +9,19 @@ import java.util.UUID;
  * <p>{@code triagem} fica {@code null} enquanto o chamado nao for triado: o
  * cliente distingue "ainda nao classificado" de "classificado" pelo proprio
  * campo, sem precisar interpretar o status.</p>
+ *
+ * <p>{@code proximaTentativaAutomatica} so aparece num chamado pendente que
+ * ainda vai ser revisitado: diz ao cliente quando olhar de novo. Pendente com
+ * esse campo {@code null} esgotou as tentativas automaticas e espera uma
+ * pessoa.</p>
  */
 public record ChamadoResposta(
         UUID id,
         String texto,
         StatusChamado status,
         Instant criadoEm,
-        TriagemResposta triagem) {
+        TriagemResposta triagem,
+        Instant proximaTentativaAutomatica) {
 
     public record TriagemResposta(
             Categoria categoria,
@@ -39,6 +45,7 @@ public record ChamadoResposta(
                 chamado.getTexto(),
                 chamado.getStatus(),
                 chamado.getCriadoEm(),
-                triagem);
+                triagem,
+                chamado.getProximaTentativaEm());
     }
 }

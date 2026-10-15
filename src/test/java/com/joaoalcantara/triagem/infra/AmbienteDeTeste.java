@@ -37,6 +37,11 @@ public class AmbienteDeTeste {
         chamados.deleteAll();
         gemini.resetAll();
         groq.resetAll();
+        reiniciarCircuitos();
+    }
+
+    /** Fecha os circuitos de todos os provedores, como se nenhuma falha tivesse acontecido. */
+    public void reiniciarCircuitos() {
         disjuntores.getAllCircuitBreakers().forEach(CircuitBreaker::reset);
     }
 }
