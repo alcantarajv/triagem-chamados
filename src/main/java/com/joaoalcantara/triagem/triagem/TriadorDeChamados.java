@@ -1,11 +1,13 @@
 package com.joaoalcantara.triagem.triagem;
 
+import java.time.Duration;
 import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import com.joaoalcantara.triagem.infra.MetricasDaTriagem;
 import com.joaoalcantara.triagem.triagem.ClassificadorComValidacao.TriagemObtida;
 import com.joaoalcantara.triagem.triagem.FilaDeTriagem.ChamadoReservado;
 
@@ -22,10 +24,12 @@ public class TriadorDeChamados {
 
     private final FilaDeTriagem fila;
     private final ClassificadorComValidacao classificador;
+    private final MetricasDaTriagem metricas;
 
-    public TriadorDeChamados(FilaDeTriagem fila, ClassificadorComValidacao classificador) {
+    public TriadorDeChamados(FilaDeTriagem fila, ClassificadorComValidacao classificador, MetricasDaTriagem metricas) {
         this.fila = fila;
         this.classificador = classificador;
+        this.metricas = metricas;
     }
 
     /**
@@ -68,9 +72,12 @@ public class TriadorDeChamados {
      * <p>O texto do chamado nunca vai para o log: pode conter dados pessoais.</p>
      */
     private void triar(ChamadoReservado chamado) {
+        long inicio = System.nanoTime();
         try {
             TriagemObtida triagem = classificador.classificar(chamado.texto());
             fila.registrarTriagem(chamado.id(), triagem.classificacao(), triagem.provedor(), triagem.doCache());
+            metricas.triagem("triado", triagem.provedor(), triagem.houveFallback(), triagem.doCache(),
+                    Duration.ofNanos(System.nanoTime() - inicio));
             if (triagem.doCache()) {
                 log.info("Chamado {} triado pelo cache (classificacao original de {})", chamado.id(),
                         triagem.provedor());
@@ -83,12 +90,18 @@ public class TriadorDeChamados {
         } catch (TodosOsProvedoresFalharamException e) {
             log.warn("Chamado {} fica pendente: {}", chamado.id(), e.getMessage());
             fila.registrarFalhaDaTriagem(chamado.id());
+            registrarPendente(inicio);
         } catch (RuntimeException e) {
             // Classificacao validada que mesmo assim nao coube no banco. Nao deveria
             // acontecer — o validador e as restricoes do banco usam os mesmos
             // limites —, mas, se acontecer, o chamado nao pode ficar preso na fila.
             log.error("Chamado {} fica pendente: falha ao gravar a triagem", chamado.id(), e);
             fila.registrarFalhaDaTriagem(chamado.id());
+            registrarPendente(inicio);
         }
+    }
+
+    private void registrarPendente(long inicio) {
+        metricas.triagem("pendente", "nenhum", false, false, Duration.ofNanos(System.nanoTime() - inicio));
     }
 }

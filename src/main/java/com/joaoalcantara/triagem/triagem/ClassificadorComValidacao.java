@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 
 import com.joaoalcantara.triagem.chamado.Classificacao;
 import com.joaoalcantara.triagem.custo.CacheDeClassificacao;
+import com.joaoalcantara.triagem.infra.MetricasDaTriagem;
 import com.joaoalcantara.triagem.provedor.FalhaNoProvedorException;
 import com.joaoalcantara.triagem.provedor.ProvedorDeIa;
 import com.joaoalcantara.triagem.provedor.ProvedoresDeIa;
@@ -40,12 +41,14 @@ public class ClassificadorComValidacao {
     private final ProvedoresDeIa provedores;
     private final ValidadorDeClassificacao validador;
     private final CacheDeClassificacao cache;
+    private final MetricasDaTriagem metricas;
 
     public ClassificadorComValidacao(ProvedoresDeIa provedores, ValidadorDeClassificacao validador,
-                                     CacheDeClassificacao cache) {
+                                     CacheDeClassificacao cache, MetricasDaTriagem metricas) {
         this.provedores = provedores;
         this.validador = validador;
         this.cache = cache;
+        this.metricas = metricas;
     }
 
     /**
@@ -73,6 +76,8 @@ public class ClassificadorComValidacao {
      */
     public TriagemObtida classificar(String texto) {
         var guardada = cache.buscar(texto);
+        metricas.consultaAoCache(guardada.isPresent(), guardada.map(CacheDeClassificacao.ClassificacaoGuardada::provedor)
+                .orElse(null));
         if (guardada.isPresent()) {
             return new TriagemObtida(guardada.get().classificacao(), guardada.get().provedor(), List.of(), true);
         }
@@ -101,12 +106,16 @@ public class ClassificadorComValidacao {
         }
 
         var erros = ((ResultadoDaValidacao.Invalida) primeira).erros();
+        metricas.respostaInvalida(provedor.nome(), "primeira");
         log.info("Resposta de {} recusada, pedindo correcao: {}", provedor.nome(), erros);
 
         String corrigida = provedor.corrigir(texto, resposta, erros);
         return switch (validador.validar(corrigida)) {
             case ResultadoDaValidacao.Valida valida -> valida.classificacao();
-            case ResultadoDaValidacao.Invalida invalida -> throw new RespostaInvalidaException(provedor.nome(), invalida.erros());
+            case ResultadoDaValidacao.Invalida invalida -> {
+                metricas.respostaInvalida(provedor.nome(), "correcao");
+                throw new RespostaInvalidaException(provedor.nome(), invalida.erros());
+            }
         };
     }
 }

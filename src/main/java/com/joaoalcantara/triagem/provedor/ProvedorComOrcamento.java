@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.function.Supplier;
 
 import com.joaoalcantara.triagem.custo.OrcamentoDiario;
+import com.joaoalcantara.triagem.infra.MetricasDaTriagem;
 
 /**
  * Confere o orcamento diario do provedor antes de cada requisicao.
@@ -20,12 +21,15 @@ public class ProvedorComOrcamento implements ProvedorDeIa {
     private final OrcamentoDiario orcamento;
     private final int requisicoesPorDia;
     private final ZoneId fuso;
+    private final MetricasDaTriagem metricas;
 
-    public ProvedorComOrcamento(ProvedorDeIa provedor, OrcamentoDiario orcamento, int requisicoesPorDia, ZoneId fuso) {
+    public ProvedorComOrcamento(ProvedorDeIa provedor, OrcamentoDiario orcamento, int requisicoesPorDia, ZoneId fuso,
+                                MetricasDaTriagem metricas) {
         this.provedor = provedor;
         this.orcamento = orcamento;
         this.requisicoesPorDia = requisicoesPorDia;
         this.fuso = fuso;
+        this.metricas = metricas;
     }
 
     @Override
@@ -45,6 +49,7 @@ public class ProvedorComOrcamento implements ProvedorDeIa {
 
     private String dentroDoOrcamento(Supplier<String> chamada) {
         if (!orcamento.reservar(provedor.nome(), requisicoesPorDia, fuso)) {
+            metricas.provedorPulado(provedor.nome(), "orcamento_esgotado");
             throw FalhaNoProvedorException.orcamentoEsgotado(provedor.nome(), requisicoesPorDia);
         }
         return chamada.get();

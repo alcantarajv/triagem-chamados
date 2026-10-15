@@ -6,6 +6,8 @@ import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.joaoalcantara.triagem.infra.MetricasDaTriagem;
+
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 
@@ -32,10 +34,12 @@ public class ProvedorComDisjuntor implements ProvedorDeIa {
 
     private final ProvedorDeIa provedor;
     private final CircuitBreaker disjuntor;
+    private final MetricasDaTriagem metricas;
 
-    public ProvedorComDisjuntor(ProvedorDeIa provedor, CircuitBreaker disjuntor) {
+    public ProvedorComDisjuntor(ProvedorDeIa provedor, CircuitBreaker disjuntor, MetricasDaTriagem metricas) {
         this.provedor = provedor;
         this.disjuntor = disjuntor;
+        this.metricas = metricas;
         this.disjuntor.getEventPublisher().onStateTransition(evento -> log.warn(
                 "Circuito do provedor {}: {} -> {}", provedor.nome(),
                 evento.getStateTransition().getFromState(), evento.getStateTransition().getToState()));
@@ -60,6 +64,7 @@ public class ProvedorComDisjuntor implements ProvedorDeIa {
         try {
             return disjuntor.executeSupplier(chamada);
         } catch (CallNotPermittedException aberto) {
+            metricas.provedorPulado(provedor.nome(), "circuito_aberto");
             throw FalhaNoProvedorException.circuitoAberto(provedor.nome(), aberto);
         }
     }

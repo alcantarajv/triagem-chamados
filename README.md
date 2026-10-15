@@ -4,7 +4,7 @@ API REST que recebe chamados de suporte em texto livre e usa um modelo de lingua
 
 O que este projeto resolve não é o prompt. É a engenharia de backend em volta de uma dependência que **demora, falha, cobra por uso e às vezes responde algo fora do combinado**.
 
-> **Status:** em construção — Etapa 8 de 13. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 9 de 13. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -127,7 +127,7 @@ A promessa se cumpriu na Etapa 6: o Groq entrou sem uma linha de código de adap
 | Ordem | Provedor | Modelo | Por quê |
 |---|---|---|---|
 | 1º | Gemini | `gemini-3.5-flash-lite` | mais folga de tokens no plano gratuito (~250 mil por minuto) |
-| 2º | Groq | `openai/gpt-oss-20b` | saída estruturada em modo estrito; só 8 mil tokens por minuto, então serve melhor de reserva |
+| 2º | Groq | `openai/gpt-oss-20b` | saída estruturada em modo estrito; 8 mil tokens por minuto, e o modelo raciocina antes de responder, o que também consome tokens |
 
 O `ClassificadorComValidacao` percorre a cadeia. Cada provedor tem a sua chance inteira — as novas tentativas para falha transitória e a correção de resposta inválida — antes de a vez passar ao seguinte, que recebe o pedido original, e não a conversa de correção do anterior. Só quando todos falham o chamado vai para triagem manual. Provedor sem chave configurada fica fora da cadeia, em vez de gastar em todo chamado uma requisição fadada ao `401`.
 
@@ -184,6 +184,33 @@ Cada chamado registrado vira pelo menos uma requisição a um provedor, e a cota
 - **Corpo inválido não gasta o limite**: é recusado pela validação antes de chegar à contagem.
 
 Na aplicação real, o 11º `POST` da hora recebeu `429` com `Retry-After: 1536`, os segundos que faltavam para a hora virar.
+
+### Métricas por provedor, no formato do Prometheus
+
+O Actuator já entrega as métricas técnicas — latência HTTP, pool de conexões, memória. Elas respondem "a aplicação está de pé?". As da triagem respondem a pergunta deste projeto: **como os provedores de IA estão se comportando, e quanto cada um está custando?** Um provedor lento, um fallback que virou caminho de todo dia, um cache que nunca acerta, um orçamento que acaba às 15h — nada disso aparece no health check.
+
+| Métrica | Tipo | Etiquetas | Responde |
+|---|---|---|---|
+| `triagem_provedor_requisicoes_seconds` | timer com histograma | `provedor`, `resultado` (`sucesso`, `transitoria`, `definitiva`) | latência e erros de cada provedor, com percentis 95 e 99 |
+| `triagem_provedor_tokens_total` | contador | `provedor`, `tipo` (`entrada`, `saida`) | quanto cada provedor está cobrando |
+| `triagem_provedor_pulados_total` | contador | `provedor`, `motivo` (`circuito_aberto`, `orcamento_esgotado`) | quantas vezes um provedor foi pulado sem requisição |
+| `triagem_triagens_seconds` | timer com histograma | `resultado`, `provedor`, `fallback`, `cache` | rodadas de triagem de ponta a ponta; `fallback="true"` conta os fallbacks |
+| `triagem_cache_total` | contador | `resultado` (`acerto`, `falta`), `provedor` | taxa de acerto do cache, e de qual provedor era o custo evitado |
+| `triagem_respostas_invalidas_total` | contador | `provedor`, `tentativa` (`primeira`, `correcao`) | quanto cada modelo erra o formato |
+| `triagem_chamados_registrados_total`, `triagem_chamados_recusados_total` | contadores | `motivo` | entrada de chamados e recusas pelo limite |
+| `triagem_fila` | medidor | `situacao` (`recebidos`, `pendentes_em_revisao`, `pendentes_para_pessoa`) | a fila agora; recebidos que só crescem indicam worker parado ou provedores sem dar conta |
+| `triagem_orcamento_usado`, `triagem_orcamento_limite` | medidores | `provedor` | quanto do orçamento do dia já foi |
+| `resilience4j_circuitbreaker_state` | medidor | `name`, `state` | o estado de cada circuito |
+
+Algumas escolhas por trás da tabela:
+
+- **A requisição é medida colada ao HTTP**, no adaptador: cada requisição que de fato saiu conta uma vez, e as puladas pelo circuito ou pelo orçamento vão para uma métrica própria, em vez de aparecerem como requisições de duração zero.
+- **Tokens medidos pela aplicação**, a partir do uso que o provedor devolve em cada resposta. O Spring AI tem métricas de tokens prontas, mas marca os dois provedores como `openai`, porque é o protocolo que eles falam; aqui cada um sai com o próprio nome.
+- **Histograma, e não só média.** Um provedor pode ter média de 2s com 5% das chamadas batendo no tempo limite de 15s; com os buckets, o Prometheus calcula o percentil 95.
+- **Etiquetas com poucos valores possíveis**: nome do provedor, resultado, motivo. Etiqueta com id de chamado multiplicaria as séries a cada chamado, e o texto do chamado nunca sai daqui — um teste triagem um chamado com uma marca distinta no texto e confere que ela não aparece em `/actuator/prometheus`.
+- **Medidores que leem o banco se protegem**: com o banco fora, o medidor fica vazio em vez de derrubar a coleta inteira.
+
+Os testes provocam cada situação — triagem pelo principal, fallback, acerto de cache, resposta inválida, circuito aberto, orçamento esgotado, pendente, limite excedido — e conferem que a métrica correspondente mudou. Na aplicação real, oito triagens pelo Gemini registraram 1,13s de latência média por requisição e cerca de 300 tokens de entrada e 35 de saída por triagem.
 
 ### O SDK não repete chamadas escondido
 
@@ -306,6 +333,8 @@ Nenhum teste automatizado chama um provedor real. O WireMock sobe um servidor HT
 |---|---|---|
 | `POST` | `/api/chamados` | `202` com o chamado `RECEBIDO` e o cabeçalho `Location`; `429` com `Retry-After` passado o limite de 10 por hora |
 | `GET` | `/api/chamados/{id}` | `200` com o chamado e, depois da triagem, a classificação; `404` se não existir |
+| `GET` | `/actuator/health` | estado da aplicação e do banco |
+| `GET` | `/actuator/prometheus` | métricas no formato do Prometheus (ver [Métricas por provedor](#métricas-por-provedor-no-formato-do-prometheus)) |
 
 ```bash
 curl -i -X POST http://localhost:8080/api/chamados \
@@ -457,7 +486,7 @@ Java 21 · Spring Boot 4 · Spring AI · Google Gemini · Groq · PostgreSQL · 
 - [x] **Etapa 6** — Segundo provedor (Groq), cadeia de fallback e circuit breaker por provedor
 - [x] **Etapa 7** — Degradação: triagem manual quando todos os provedores falham e job de nova tentativa
 - [x] **Etapa 8** — Controle de custo: cache por texto normalizado, limite por cliente e orçamento diário
-- [ ] **Etapa 9** — Métricas por provedor com Micrometer e Prometheus
+- [x] **Etapa 9** — Métricas por provedor com Micrometer e Prometheus
 - [ ] **Etapa 10** — Página de demonstração
 - [ ] **Etapa 11** — Dockerfile, CI no GitHub Actions e deploy no Render
 - [ ] **Etapa 12** — README final

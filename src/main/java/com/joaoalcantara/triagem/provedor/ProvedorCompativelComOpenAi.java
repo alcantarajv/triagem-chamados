@@ -1,17 +1,22 @@
 package com.joaoalcantara.triagem.provedor;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
 import java.util.function.Supplier;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.metadata.Usage;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 
 import com.joaoalcantara.triagem.chamado.Classificacao;
+import com.joaoalcantara.triagem.infra.MetricasDaTriagem;
 
 /**
  * Provedor de IA que fala a API de chat da OpenAI.
@@ -37,10 +42,13 @@ public class ProvedorCompativelComOpenAi implements ProvedorDeIa {
     private final String nome;
     private final ChatClient cliente;
     private final Clock relogio;
+    private final MetricasDaTriagem metricas;
 
-    public ProvedorCompativelComOpenAi(String nome, PropriedadesDoProvedor propriedades, Clock relogio) {
+    public ProvedorCompativelComOpenAi(String nome, PropriedadesDoProvedor propriedades, Clock relogio,
+                                       MetricasDaTriagem metricas) {
         this.nome = nome;
         this.relogio = relogio;
+        this.metricas = metricas;
 
         OpenAiChatOptions.Builder opcoes = OpenAiChatOptions.builder()
                 .baseUrl(propriedades.url())
@@ -89,7 +97,7 @@ public class ProvedorCompativelComOpenAi implements ProvedorDeIa {
                 .system(InstrucoesDeTriagem.SISTEMA)
                 .user(InstrucoesDeTriagem.mensagemDoUsuario(texto))
                 .call()
-                .content());
+                .chatResponse());
     }
 
     /**
@@ -106,14 +114,39 @@ public class ProvedorCompativelComOpenAi implements ProvedorDeIa {
                         new AssistantMessage(InstrucoesDeTriagem.respostaAnterior(respostaAnterior)),
                         new UserMessage(InstrucoesDeTriagem.mensagemDeCorrecao(erros)))
                 .call()
-                .content());
+                .chatResponse());
     }
 
-    private String chamar(Supplier<String> chamada) {
+    /**
+     * Faz a requisicao e mede: quanto demorou, como terminou e quantos tokens o
+     * provedor cobrou. E aqui, colado ao HTTP, que cada requisicao que de fato
+     * saiu e contada uma vez — nem as puladas pelo circuito ou pelo orcamento,
+     * nem as novas tentativas contadas em dobro.
+     */
+    private String chamar(Supplier<ChatResponse> chamada) {
+        long inicio = System.nanoTime();
         try {
-            return chamada.get();
+            ChatResponse resposta = chamada.get();
+            metricas.requisicaoAoProvedor(nome, "sucesso", Duration.ofNanos(System.nanoTime() - inicio));
+            return textoDe(resposta);
         } catch (RuntimeException e) {
-            throw TradutorDeFalhas.traduzir(nome, e, relogio);
+            FalhaNoProvedorException falha = TradutorDeFalhas.traduzir(nome, e, relogio);
+            metricas.requisicaoAoProvedor(nome, MetricasDaTriagem.etiqueta(falha.tipo()),
+                    Duration.ofNanos(System.nanoTime() - inicio));
+            throw falha;
         }
+    }
+
+    /** O texto da resposta; registra os tokens cobrados, quando o provedor informa. */
+    private String textoDe(ChatResponse resposta) {
+        if (resposta == null) {
+            return null;
+        }
+        Usage uso = resposta.getMetadata() == null ? null : resposta.getMetadata().getUsage();
+        if (uso != null) {
+            metricas.tokens(nome, uso.getPromptTokens(), uso.getCompletionTokens());
+        }
+        Generation geracao = resposta.getResult();
+        return geracao == null ? null : geracao.getOutput().getText();
     }
 }

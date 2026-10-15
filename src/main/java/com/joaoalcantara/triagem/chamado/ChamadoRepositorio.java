@@ -51,6 +51,14 @@ public interface ChamadoRepositorio extends JpaRepository<Chamado, UUID> {
             """, nativeQuery = true)
     Optional<Chamado> buscarProximoParaRevisao(Instant agora);
 
+    long countByStatus(StatusChamado status);
+
+    /** Pendentes que o revisor ainda vai retomar. */
+    long countByStatusAndProximaTentativaEmIsNotNull(StatusChamado status);
+
+    /** Pendentes que esgotaram as tentativas automaticas e esperam uma pessoa. */
+    long countByStatusAndProximaTentativaEmIsNull(StatusChamado status);
+
     /** Le o chamado travando a linha, para gravar o resultado sem corrida. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT c FROM Chamado c WHERE c.id = :id")

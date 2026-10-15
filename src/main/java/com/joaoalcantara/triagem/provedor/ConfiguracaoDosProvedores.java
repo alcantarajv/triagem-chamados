@@ -11,10 +11,13 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import com.joaoalcantara.triagem.custo.OrcamentoDiario;
+import com.joaoalcantara.triagem.infra.MetricasDaTriagem;
 
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.SlidingWindowType;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.github.resilience4j.micrometer.tagged.TaggedCircuitBreakerMetrics;
+import io.micrometer.core.instrument.MeterRegistry;
 
 @Configuration
 @EnableConfigurationProperties({PropriedadesDosProvedores.class, PropriedadesDaRepeticao.class,
@@ -42,7 +45,7 @@ public class ConfiguracaoDosProvedores {
      * num instante, sem esperar um minuto de verdade.</p>
      */
     @Bean
-    CircuitBreakerRegistry disjuntores(PropriedadesDoDisjuntor propriedades, Clock relogio) {
+    CircuitBreakerRegistry disjuntores(PropriedadesDoDisjuntor propriedades, Clock relogio, MeterRegistry metricas) {
         CircuitBreakerConfig configuracao = CircuitBreakerConfig.custom()
                 .slidingWindow(propriedades.falhasSeguidas(), propriedades.falhasSeguidas(), SlidingWindowType.COUNT_BASED)
                 .failureRateThreshold(100)
@@ -55,7 +58,11 @@ public class ConfiguracaoDosProvedores {
                 .ignoreException(erro -> erro instanceof FalhaNoProvedorException falha && !falha.falhaDoProvedor())
                 .clock(relogio)
                 .build();
-        return CircuitBreakerRegistry.of(configuracao);
+        CircuitBreakerRegistry registro = CircuitBreakerRegistry.of(configuracao);
+        // Estado de cada circuito (fechado, aberto, meio aberto) e as chamadas que
+        // ele contou, como metricas: resilience4j_circuitbreaker_state{name="gemini"}.
+        TaggedCircuitBreakerMetrics.ofCircuitBreakerRegistry(registro).bindTo(metricas);
+        return registro;
     }
 
     /**
@@ -71,17 +78,19 @@ public class ConfiguracaoDosProvedores {
      */
     @Bean
     ProvedoresDeIa provedoresDeIa(PropriedadesDosProvedores provedores, PropriedadesDaRepeticao repeticao,
-                                  CircuitBreakerRegistry disjuntores, OrcamentoDiario orcamento, Clock relogio) {
+                                  CircuitBreakerRegistry disjuntores, OrcamentoDiario orcamento, Clock relogio,
+                                  MetricasDaTriagem metricas) {
         List<ProvedorDeIa> cadeia = new ArrayList<>();
         provedores.emOrdem().forEach((nome, propriedades) -> {
             if (!propriedades.temChave()) {
                 log.warn("Provedor {} sem chave configurada: fica fora da cadeia de triagem", nome);
                 return;
             }
-            ProvedorDeIa cliente = new ProvedorCompativelComOpenAi(nome, propriedades, relogio);
+            ProvedorDeIa cliente = new ProvedorCompativelComOpenAi(nome, propriedades, relogio, metricas);
             ProvedorDeIa comOrcamento = new ProvedorComOrcamento(cliente, orcamento,
-                    propriedades.orcamentoDiario(), propriedades.fusoDoOrcamento());
-            ProvedorDeIa comDisjuntor = new ProvedorComDisjuntor(comOrcamento, disjuntores.circuitBreaker(nome));
+                    propriedades.orcamentoDiario(), propriedades.fusoDoOrcamento(), metricas);
+            ProvedorDeIa comDisjuntor = new ProvedorComDisjuntor(comOrcamento, disjuntores.circuitBreaker(nome),
+                    metricas);
             cadeia.add(new ProvedorComRepeticao(comDisjuntor, repeticao));
         });
         if (cadeia.isEmpty()) {

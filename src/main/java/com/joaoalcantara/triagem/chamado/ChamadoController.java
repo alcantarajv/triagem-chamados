@@ -12,7 +12,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.joaoalcantara.triagem.custo.IdentificadorDeCliente;
+import com.joaoalcantara.triagem.custo.LimiteDeChamadosExcedidoException;
 import com.joaoalcantara.triagem.custo.LimiteDeChamadosPorCliente;
+import com.joaoalcantara.triagem.infra.MetricasDaTriagem;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -24,12 +26,14 @@ public class ChamadoController {
     private final ChamadoServico servico;
     private final LimiteDeChamadosPorCliente limite;
     private final IdentificadorDeCliente identificador;
+    private final MetricasDaTriagem metricas;
 
     public ChamadoController(ChamadoServico servico, LimiteDeChamadosPorCliente limite,
-                             IdentificadorDeCliente identificador) {
+                             IdentificadorDeCliente identificador, MetricasDaTriagem metricas) {
         this.servico = servico;
         this.limite = limite;
         this.identificador = identificador;
+        this.metricas = metricas;
     }
 
     /**
@@ -47,8 +51,14 @@ public class ChamadoController {
     @PostMapping
     public ResponseEntity<ChamadoResposta> registrar(@Valid @RequestBody NovoChamado novo,
                                                      HttpServletRequest requisicao) {
-        limite.consumir(identificador.enderecoDe(requisicao));
+        try {
+            limite.consumir(identificador.enderecoDe(requisicao));
+        } catch (LimiteDeChamadosExcedidoException e) {
+            metricas.chamadoRecusado("limite_por_cliente");
+            throw e;
+        }
         ChamadoResposta corpo = ChamadoResposta.de(servico.registrar(novo.texto()));
+        metricas.chamadoRegistrado();
         return ResponseEntity
                 .accepted()
                 .location(URI.create("/api/chamados/" + corpo.id()))

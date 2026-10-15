@@ -13,8 +13,9 @@ public record PropriedadesDosProvedores(PropriedadesDoProvedor gemini, Proprieda
      * Os provedores na ordem da cadeia de fallback: o primeiro e o principal.
      *
      * <p>Gemini primeiro por ter mais folga de tokens por minuto (cerca de 250
-     * mil, contra 8 mil do Groq) — o Groq aguenta poucos chamados por minuto e
-     * funciona melhor como reserva do que como caminho de todo dia.</p>
+     * mil, contra 8 mil do Groq, cujo modelo ainda gasta tokens raciocinando).
+     * As metricas por provedor mostram, com o uso real, se essa ordem continua
+     * a melhor.</p>
      */
     public SequencedMap<String, PropriedadesDoProvedor> emOrdem() {
         SequencedMap<String, PropriedadesDoProvedor> provedores = new LinkedHashMap<>();
