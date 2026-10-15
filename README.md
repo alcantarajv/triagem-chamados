@@ -4,7 +4,7 @@ API REST que recebe chamados de suporte em texto livre e usa um modelo de lingua
 
 O que este projeto resolve não é o prompt. É a engenharia de backend em volta de uma dependência que **demora, falha, cobra por uso e às vezes responde algo fora do combinado**.
 
-> **Status:** em construção — Etapa 5 de 13. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 6 de 13. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -97,13 +97,43 @@ Os testes comprovam as três partes: quatro workers simultâneos sobre 30 chamad
 
 ### Falha vai para triagem manual, nunca de volta para a fila
 
-Quando a triagem automática não dá certo — erro do provedor, ou resposta recusada duas vezes pela validação —, o chamado vai para `PENDENTE_TRIAGEM_MANUAL`. Devolvê-lo à fila parece mais generoso, mas um chamado que sempre falha seria pego de novo a cada volta do worker, para sempre, gastando cota a cada tentativa. As segundas chances existem, mas com critério e uma de cada vez: a correção de resposta inválida (abaixo) já está implementada; a repetição de erros transitórios, o segundo provedor e um job que revisita os pendentes vêm nas próximas etapas.
+Quando a triagem automática não dá certo, o chamado vai para `PENDENTE_TRIAGEM_MANUAL`. Devolvê-lo à fila parece mais generoso, mas um chamado que sempre falha seria pego de novo a cada volta do worker, para sempre, gastando cota a cada tentativa. As segundas chances existem, mas com critério e antes de desistir: a correção de resposta inválida, a repetição de erros transitórios e o segundo provedor, descritos abaixo. Só depois de todos falharem o chamado vai para triagem manual; o job que revisita os pendentes mais tarde vem na Etapa 7.
 
 ### Um cliente compatível com a OpenAI para os dois provedores
 
 O Gemini e o Groq expõem endpoints compatíveis com a API de chat da OpenAI. Em vez de um módulo do Spring AI por provedor (`spring-ai-google-genai` para o Gemini, outro para o Groq), o projeto usa o `spring-ai-openai` com uma única classe, `ProvedorCompativelComOpenAi`, instanciada uma vez por provedor com URL, chave e modelo próprios. Os testes só precisam imitar um formato de resposta, e o segundo provedor vira configuração em vez de código.
 
 Sem o starter do Spring AI: ele cria um único modelo a partir de `spring.ai.openai.*`, e este projeto precisa de um por provedor. O custo da escolha é ficar sem os recursos específicos do Gemini que a camada de compatibilidade não expõe — nenhum deles necessário para classificar texto.
+
+A promessa se cumpriu na Etapa 6: o Groq entrou sem uma linha de código de adaptador, só com URL, chave, modelo e um parâmetro a mais (`reasoning_effort`, ver abaixo).
+
+### Dois provedores em cadeia, e cada um tem a sua chance inteira
+
+| Ordem | Provedor | Modelo | Por quê |
+|---|---|---|---|
+| 1º | Gemini | `gemini-3.5-flash-lite` | mais folga de tokens no plano gratuito (~250 mil por minuto) |
+| 2º | Groq | `openai/gpt-oss-20b` | saída estruturada em modo estrito; só 8 mil tokens por minuto, então serve melhor de reserva |
+
+O `ClassificadorComValidacao` percorre a cadeia. Cada provedor tem a sua chance inteira — as novas tentativas para falha transitória e a correção de resposta inválida — antes de a vez passar ao seguinte, que recebe o pedido original, e não a conversa de correção do anterior. Só quando todos falham o chamado vai para triagem manual. Provedor sem chave configurada fica fora da cadeia, em vez de gastar em todo chamado uma requisição fadada ao `401`.
+
+No Groq, o modelo foi escolhido por ser um dos poucos com **saída estruturada em modo estrito** (o JSON respeita o esquema, e não só a sintaxe); os demais garantem apenas um JSON válido. Ele raciocina antes de responder, e o raciocínio é cobrado em tokens — justamente o limite que aperta no plano gratuito. Por isso vai com `reasoning_effort: low`: classificar um chamado em cinco categorias não pede raciocínio longo.
+
+Os testes cobrem cada motivo de passar a vez — principal lento, com cota esgotada pedindo 26s, fora do ar, com a chave recusada, inválido mesmo depois da correção — e contam as requisições que chegam a cada WireMock. O fallback também foi conferido com os provedores reais, apontando o Gemini para um endereço sem resposta: três tentativas recusadas, com esperas de 744ms e 1.826ms, e o Groq triou o chamado.
+
+### Circuit breaker por provedor
+
+Sem circuit breaker, um provedor fora do ar custa a cada chamado o tempo limite inteiro, vezes as tentativas, antes de a vez passar adiante. Com ele, depois de **cinco falhas seguidas** o provedor é **pulado sem requisição nenhuma** durante **um minuto**; passada a janela, **uma** chamada de teste decide se ele volta ou se a janela recomeça.
+
+"Cinco falhas seguidas", e não "50% das últimas dez": uma resposta boa no meio zera a contagem. Uma taxa menor abriria o circuito de um provedor que está só instável e mandaria para o fallback chamados que ele ainda resolveria. Só falha de comunicação conta; resposta inválida é um provedor que respondeu.
+
+Um circuito **por provedor**: o Gemini fora do ar não pode tirar o Groq da cadeia. E o circuito fica **dentro** da nova tentativa, contando cada tentativa: do lado de fora, uma triagem com três tentativas fracassadas contaria como uma falha só, e o circuito levaria três vezes mais requisições inúteis para abrir. A pilha de cada provedor, de fora para dentro:
+
+```
+ProvedorComRepeticao  →  ProvedorComDisjuntor  →  ProvedorCompativelComOpenAi
+ (novas tentativas)       (circuit breaker)        (HTTP com tempo limite)
+```
+
+O teste do circuito aberto confere no WireMock **zero** requisições novas ao Gemini enquanto cinco chamados seguidos são triados pelo Groq — e, com o disjuntor desligado de propósito, cinco dos seis testes do circuito falham. A janela de um minuto passa no relógio da aplicação, que o teste avança: nada de esperar de verdade para provar que, depois dela, uma única chamada de teste fecha o circuito ou o reabre.
 
 ### O SDK não repete chamadas escondido
 
@@ -123,7 +153,7 @@ Toda chamada ao provedor tem **tempo limite** (15s; o padrão do SDK é 60s) e p
 
 São três tentativas no total, com **espera crescente** (1s, depois 2s) e **variação aleatória** de 50%. A espera fixa martela um provedor que já está sobrecarregado, e sem a variação várias instâncias que falharam juntas tentariam de novo juntas.
 
-Quando o provedor diz quanto esperar, a espera dele substitui a crescente — tentar antes da hora só gasta cota para receber outro `429`. E se ele pedir mais que a **espera máxima** (10s), não se espera nem se repete: o worker não fica parado com o chamado na mão, e a falha segue adiante na hora (para o próximo provedor, a partir da Etapa 6).
+Quando o provedor diz quanto esperar, a espera dele substitui a crescente — tentar antes da hora só gasta cota para receber outro `429`. E se ele pedir mais que a **espera máxima** (10s), não se espera nem se repete: o worker não fica parado com o chamado na mão, e a falha segue adiante na hora, para o próximo provedor.
 
 **O Gemini não manda `Retry-After`.** O `429` real, provocado com uma rajada contra o plano gratuito (15 requisições por minuto), chega sem esse cabeçalho; a espera vem no corpo, no formato de erro das APIs do Google:
 
@@ -139,13 +169,13 @@ Os testes medem os intervalos pelo horário em que cada requisição chegou ao W
 
 ### Resilience4j, e não os recursos de resiliência do Spring Framework 7
 
-O Spring Framework 7 trouxe `@Retryable` e `RetryTemplate` para o núcleo, e seria natural usá-los. Mas o cálculo da espera no Spring (`BackOffExecution.nextBackOff()`) não recebe a falha que aconteceu, então não há como esperar o que cada `429` pede. O `IntervalBiFunction` do Resilience4j recebe a falha. E o Spring 7 não tem circuit breaker, que a Etapa 6 precisa: escolher o Spring agora significaria duas bibliotecas de resiliência depois. A escolha estava prevista para a Etapa 6, mas a Etapa 5 já não conseguia cumprir o que promete sem ela.
+O Spring Framework 7 trouxe `@Retryable` e `RetryTemplate` para o núcleo, e seria natural usá-los. Mas o cálculo da espera no Spring (`BackOffExecution.nextBackOff()`) não recebe a falha que aconteceu, então não há como esperar o que cada `429` pede. O `IntervalBiFunction` do Resilience4j recebe a falha. E o Spring 7 não tem circuit breaker: só o Resilience4j cobre as duas coisas, e ficar com uma biblioteca de resiliência só é melhor que dividir a política entre duas.
 
-Os módulos são os do núcleo (`resilience4j-retry`), sem o starter: cada provedor monta as próprias instâncias com configuração própria, como os modelos do Spring AI.
+Os módulos são os do núcleo (`resilience4j-retry` e `resilience4j-circuitbreaker`), sem o starter: cada provedor monta as próprias instâncias com configuração própria, como os modelos do Spring AI.
 
 ### A reserva do worker cobre a triagem mais demorada, e a aplicação confere
 
-Repetir alonga a triagem, e a reserva do chamado precisa durar mais que ela — se vencer no meio, outro worker pega o mesmo chamado e o provedor é pago duas vezes. O pior caso é **2 chamadas** (pedido e correção) × (**3 tentativas** × **15s** + **2 esperas** de até **10s**) = **130s**, e a reserva é de 3 minutos. Os três números moram em lugares diferentes da configuração, e mudar um sem os outros é fácil; a `ConferenciaDaReserva` refaz a conta na largada e **recusa subir** se ela não fechar, explicando qual número mexer.
+Repetir alonga a triagem, e a reserva do chamado precisa durar mais que ela — se vencer no meio, outro worker pega o mesmo chamado e o provedor é pago duas vezes. O pior caso, para cada provedor, é **2 chamadas** (pedido e correção) × (**3 tentativas** × **15s** + **2 esperas** de até **10s**) = **130s**; com dois provedores na cadeia, **260s**, e a reserva é de 5 minutos. Com o Groq na cadeia, a reserva de 3 minutos deixou de cobrir o pior caso, e um teste confere que a conferência recusa essa configuração. Os números moram em lugares diferentes da configuração, e mudar um sem os outros é fácil; a `ConferenciaDaReserva` refaz a conta na largada e **recusa subir** se ela não fechar, explicando qual número mexer.
 
 ### Saída estruturada nativa
 
@@ -295,7 +325,7 @@ docker compose up -d
 
 No Windows, use `mvnw.cmd` no lugar de `./mvnw`.
 
-Para a triagem automática funcionar, coloque no `.env` uma chave do Gemini, gerada em <https://aistudio.google.com> (**Get API key**). Sem ela, a aplicação sobe do mesmo jeito e os chamados vão para triagem manual. No plano gratuito, o Google pode usar o conteúdo enviado para melhorar os modelos: não envie dados reais.
+Para a triagem automática funcionar, coloque no `.env` as chaves dos provedores: a do Gemini, gerada em <https://aistudio.google.com> (**Get API key**), e a do Groq, gerada em <https://console.groq.com> (**API Keys**). Com uma só, a cadeia fica só com aquele provedor; sem nenhuma, a aplicação sobe do mesmo jeito e os chamados vão para triagem manual. No plano gratuito, o Google pode usar o conteúdo enviado para melhorar os modelos: não envie dados reais.
 
 A aplicação sobe em <http://localhost:8080>.
 
@@ -331,11 +361,11 @@ Os testes são a prova do argumento central. O WireMock faz o papel dos provedor
 | Provedor responde `5xx` ou `408` | nova tentativa com espera crescente; três falhas, exatamente três requisições | comprovado (`RepeticaoIT`) |
 | Provedor responde `4xx` de requisição inválida | uma única requisição, sem repetição | comprovado (`RepeticaoIT`) |
 | Provedor responde `429` com `Retry-After` ou `retryDelay` | a nova tentativa espera o que foi pedido; se o pedido passa da espera máxima, uma única requisição | comprovado (`RepeticaoIT`) |
-| Principal lento ou com cota esgotada | o secundário responde e o chamado fica triado | Etapa 6 |
+| Principal lento, com cota esgotada, fora do ar ou com a chave recusada | o secundário responde e o chamado fica triado | comprovado (`FallbackIT`) |
 | Provedor responde JSON inválido ou categoria inexistente | há exatamente uma nova tentativa, com o erro no pedido; se continuar inválido, triagem manual, sem terceira chamada | comprovado (`ValidacaoDaRespostaIT`) |
-| Principal continua inválido depois da correção | o próximo provedor é consultado | Etapa 6 |
+| Principal continua inválido depois da correção | o próximo provedor é consultado, com o pedido original | comprovado (`FallbackIT`) |
 | Todos os provedores fora | o chamado fica pendente de triagem manual e a API não responde 500 | Etapa 7 |
-| N falhas seguidas no principal | o circuito abre e o principal recebe zero requisições durante a janela | Etapa 6 |
+| Cinco falhas seguidas no principal | o circuito abre e o principal recebe zero requisições durante a janela; depois dela, uma única chamada de teste fecha ou reabre o circuito | comprovado (`DisjuntorIT`) |
 | O mesmo texto enviado duas vezes | a segunda triagem vem do cache, sem chamar o provedor | Etapa 8 |
 
 ---
@@ -354,7 +384,7 @@ Java 21 · Spring Boot 4 · Spring AI · Google Gemini · Groq · PostgreSQL · 
 - [x] **Etapa 3** — Primeiro provedor (Gemini) com saída estruturada e worker assíncrono com `SKIP LOCKED`
 - [x] **Etapa 4** — Validação da saída do modelo, com uma nova tentativa informando o erro
 - [x] **Etapa 5** — Tempo limite e nova tentativa só para erros transitórios, respeitando o `Retry-After`
-- [ ] **Etapa 6** — Segundo provedor (Groq), cadeia de fallback e circuit breaker por provedor
+- [x] **Etapa 6** — Segundo provedor (Groq), cadeia de fallback e circuit breaker por provedor
 - [ ] **Etapa 7** — Degradação: triagem manual quando todos os provedores falham e job de nova tentativa
 - [ ] **Etapa 8** — Controle de custo: cache por texto normalizado, limite por cliente e orçamento diário
 - [ ] **Etapa 9** — Métricas por provedor com Micrometer e Prometheus

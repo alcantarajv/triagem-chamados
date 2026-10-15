@@ -1,55 +1,89 @@
 package com.joaoalcantara.triagem.triagem;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import com.joaoalcantara.triagem.chamado.Classificacao;
+import com.joaoalcantara.triagem.provedor.FalhaNoProvedorException;
 import com.joaoalcantara.triagem.provedor.ProvedorDeIa;
+import com.joaoalcantara.triagem.provedor.ProvedoresDeIa;
 
 /**
- * Pede a classificacao ao provedor e so a aceita depois de validada.
+ * Percorre a cadeia de provedores ate obter uma classificacao validada.
+ *
+ * <p>Cada provedor tem a sua chance completa — as novas tentativas para falha
+ * transitoria e a correcao de resposta invalida — antes de a vez passar para o
+ * seguinte. Se nenhum resolver, a triagem automatica desiste e o chamado vai
+ * para triagem manual.</p>
  *
  * <p>Resposta invalida ganha <b>uma</b> nova tentativa, com os motivos da recusa
  * no pedido. Uma, e nao "ate dar certo": o erro de formato costuma ser pontual,
  * e uma correcao com o erro apontado resolve a maioria; se o modelo erra de novo
  * mesmo sabendo o que errou, insistir com ele tende a repetir o erro e gasta
- * cota a cada volta. Depois da segunda recusa, a vez e do proximo provedor
- * (Etapa 6) ou da triagem manual.</p>
+ * cota a cada volta. Melhor perguntar a outro modelo.</p>
  *
- * <p>Essa nova tentativa vale so para resposta <i>invalida</i>. Falha de
- * comunicacao — erro HTTP, tempo esgotado — nao passa por aqui: sai do provedor
- * como {@code FalhaNoProvedorException}, e repetir ou nao e outra politica
- * (Etapa 5). Mandar "sua resposta estava errada" a um provedor que nem
- * respondeu nao faria sentido.</p>
+ * <p>Essa correcao vale so para resposta <i>invalida</i>. Falha de comunicacao
+ * — erro HTTP, tempo esgotado, circuito aberto — sai do provedor como
+ * {@link FalhaNoProvedorException}, ja depois das novas tentativas que valiam a
+ * pena, e a vez passa direto ao proximo.</p>
  */
 @Component
 public class ClassificadorComValidacao {
 
     private static final Logger log = LoggerFactory.getLogger(ClassificadorComValidacao.class);
 
-    private final ProvedorDeIa provedor;
+    private final ProvedoresDeIa provedores;
     private final ValidadorDeClassificacao validador;
 
-    public ClassificadorComValidacao(ProvedorDeIa provedor, ValidadorDeClassificacao validador) {
-        this.provedor = provedor;
+    public ClassificadorComValidacao(ProvedoresDeIa provedores, ValidadorDeClassificacao validador) {
+        this.provedores = provedores;
         this.validador = validador;
     }
 
-    /** Classificacao aceita e o provedor que a produziu. */
-    public record TriagemObtida(Classificacao classificacao, String provedor) {
+    /**
+     * Classificacao aceita, o provedor que a produziu e os que falharam antes
+     * dele. {@code provedoresQueFalharam} vazio significa que o principal
+     * resolveu; qualquer outra coisa e fallback.
+     */
+    public record TriagemObtida(Classificacao classificacao, String provedor, List<String> provedoresQueFalharam) {
+
+        public TriagemObtida {
+            provedoresQueFalharam = List.copyOf(provedoresQueFalharam);
+        }
+
+        public boolean houveFallback() {
+            return !provedoresQueFalharam.isEmpty();
+        }
     }
 
     /**
-     * @throws RespostaInvalidaException se a resposta e a correcao forem recusadas
-     * @throws com.joaoalcantara.triagem.provedor.FalhaNoProvedorException se o
-     *         provedor nao responder
+     * @throws TodosOsProvedoresFalharamException se nenhum provedor resolver
      */
     public TriagemObtida classificar(String texto) {
+        List<String> falharam = new ArrayList<>();
+        List<String> motivos = new ArrayList<>();
+        for (ProvedorDeIa provedor : provedores.emOrdem()) {
+            try {
+                Classificacao classificacao = classificarCom(provedor, texto);
+                return new TriagemObtida(classificacao, provedor.nome(), falharam);
+            } catch (FalhaNoProvedorException | RespostaInvalidaException e) {
+                log.warn("Provedor {} nao resolveu, passando a vez: {}", provedor.nome(), e.getMessage());
+                falharam.add(provedor.nome());
+                motivos.add(e.getMessage());
+            }
+        }
+        throw new TodosOsProvedoresFalharamException(motivos);
+    }
+
+    private Classificacao classificarCom(ProvedorDeIa provedor, String texto) {
         String resposta = provedor.classificar(texto);
         ResultadoDaValidacao primeira = validador.validar(resposta);
         if (primeira instanceof ResultadoDaValidacao.Valida valida) {
-            return new TriagemObtida(valida.classificacao(), provedor.nome());
+            return valida.classificacao();
         }
 
         var erros = ((ResultadoDaValidacao.Invalida) primeira).erros();
@@ -57,7 +91,7 @@ public class ClassificadorComValidacao {
 
         String corrigida = provedor.corrigir(texto, resposta, erros);
         return switch (validador.validar(corrigida)) {
-            case ResultadoDaValidacao.Valida valida -> new TriagemObtida(valida.classificacao(), provedor.nome());
+            case ResultadoDaValidacao.Valida valida -> valida.classificacao();
             case ResultadoDaValidacao.Invalida invalida -> throw new RespostaInvalidaException(provedor.nome(), invalida.erros());
         };
     }

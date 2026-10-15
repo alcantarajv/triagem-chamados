@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 
 import com.joaoalcantara.triagem.chamado.ChamadoRepositorio;
 import com.joaoalcantara.triagem.chamado.ChamadoServico;
+import com.joaoalcantara.triagem.infra.AmbienteDeTeste;
 import com.joaoalcantara.triagem.infra.RelogioAjustavel.ClockMovel;
 import com.joaoalcantara.triagem.infra.TesteDeIntegracao;
 import com.joaoalcantara.triagem.triagem.FilaDeTriagem.ChamadoReservado;
@@ -19,6 +20,9 @@ import com.joaoalcantara.triagem.triagem.FilaDeTriagem.ChamadoReservado;
 /** A reserva de chamados: quem pega o que, e quando um chamado volta para a fila. */
 @TesteDeIntegracao
 class FilaDeTriagemIT {
+
+    @Autowired
+    private AmbienteDeTeste ambiente;
 
     @Autowired
     private FilaDeTriagem fila;
@@ -37,7 +41,7 @@ class FilaDeTriagemIT {
 
     @BeforeEach
     void limpar() {
-        repositorio.deleteAll();
+        ambiente.limpar();
     }
 
     @Test

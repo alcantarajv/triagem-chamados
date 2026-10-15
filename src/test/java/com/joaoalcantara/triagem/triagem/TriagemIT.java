@@ -25,11 +25,15 @@ import com.joaoalcantara.triagem.chamado.ChamadoServico;
 import com.joaoalcantara.triagem.chamado.Prioridade;
 import com.joaoalcantara.triagem.chamado.StatusChamado;
 import com.joaoalcantara.triagem.infra.ProvedorFalso;
+import com.joaoalcantara.triagem.infra.AmbienteDeTeste;
 import com.joaoalcantara.triagem.infra.TesteDeIntegracao;
 
 /** O worker triando chamados com o Gemini simulado pelo WireMock. */
 @TesteDeIntegracao
 class TriagemIT {
+
+    @Autowired
+    private AmbienteDeTeste ambiente;
 
     private static final String TEXTO = "O sistema caiu e ninguem da equipe consegue emitir nota fiscal desde as 9h.";
 
@@ -47,8 +51,7 @@ class TriagemIT {
 
     @BeforeEach
     void limpar() {
-        repositorio.deleteAll();
-        gemini.resetAll();
+        ambiente.limpar();
     }
 
     private Chamado recarregar(UUID id) {

@@ -6,7 +6,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import com.joaoalcantara.triagem.provedor.FalhaNoProvedorException;
 import com.joaoalcantara.triagem.triagem.ClassificadorComValidacao.TriagemObtida;
 import com.joaoalcantara.triagem.triagem.FilaDeTriagem.ChamadoReservado;
 
@@ -50,9 +49,9 @@ public class TriadorDeChamados {
      * invalida — seria pego de novo a cada vencimento da reserva, para sempre,
      * gastando cota a cada volta.
      *
-     * <p>A repeticao de erros transitorios (Etapa 5), o segundo provedor
-     * (Etapa 6) e o job que revisita os pendentes (Etapa 7) entram aqui, um por
-     * vez.</p>
+     * <p>Chegar aqui com falha ja significa muito: cada provedor da cadeia teve
+     * as suas novas tentativas e a correcao de resposta invalida. O job que
+     * revisita os pendentes mais tarde vem na Etapa 7.</p>
      *
      * <p>O texto do chamado nunca vai para o log: pode conter dados pessoais.</p>
      */
@@ -60,8 +59,13 @@ public class TriadorDeChamados {
         try {
             TriagemObtida triagem = classificador.classificar(chamado.texto());
             fila.registrarTriagem(chamado.id(), triagem.classificacao(), triagem.provedor());
-            log.info("Chamado {} triado por {}", chamado.id(), triagem.provedor());
-        } catch (FalhaNoProvedorException | RespostaInvalidaException e) {
+            if (triagem.houveFallback()) {
+                log.info("Chamado {} triado por {}, depois de falha em {}", chamado.id(), triagem.provedor(),
+                        triagem.provedoresQueFalharam());
+            } else {
+                log.info("Chamado {} triado por {}", chamado.id(), triagem.provedor());
+            }
+        } catch (TodosOsProvedoresFalharamException e) {
             log.warn("Chamado {} vai para triagem manual: {}", chamado.id(), e.getMessage());
             fila.encaminharParaTriagemManual(chamado.id());
         } catch (RuntimeException e) {

@@ -25,6 +25,7 @@ import com.joaoalcantara.triagem.chamado.ChamadoRepositorio;
 import com.joaoalcantara.triagem.chamado.ChamadoServico;
 import com.joaoalcantara.triagem.chamado.StatusChamado;
 import com.joaoalcantara.triagem.infra.ProvedorFalso;
+import com.joaoalcantara.triagem.infra.AmbienteDeTeste;
 import com.joaoalcantara.triagem.infra.TesteDeIntegracao;
 import com.joaoalcantara.triagem.triagem.TriadorDeChamados;
 
@@ -39,6 +40,9 @@ import com.joaoalcantara.triagem.triagem.TriadorDeChamados;
  */
 @TesteDeIntegracao
 class RepeticaoIT {
+
+    @Autowired
+    private AmbienteDeTeste ambiente;
 
     private static final String TEXTO = "O painel administrativo esta fora do ar para todos os usuarios.";
 
@@ -56,8 +60,7 @@ class RepeticaoIT {
 
     @BeforeEach
     void limpar() {
-        repositorio.deleteAll();
-        gemini.resetAll();
+        ambiente.limpar();
     }
 
     private static ResponseDefinitionBuilder valida() {

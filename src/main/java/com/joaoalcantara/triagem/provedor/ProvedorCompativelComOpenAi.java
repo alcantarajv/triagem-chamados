@@ -42,7 +42,7 @@ public class ProvedorCompativelComOpenAi implements ProvedorDeIa {
         this.nome = nome;
         this.relogio = relogio;
 
-        OpenAiChatOptions opcoes = OpenAiChatOptions.builder()
+        OpenAiChatOptions.Builder opcoes = OpenAiChatOptions.builder()
                 .baseUrl(propriedades.url())
                 // Vazia, e nao nula: com null o Spring AI procura OPENAI_API_KEY
                 // no ambiente — a chave de outro provedor. Vazia, o cliente e
@@ -60,10 +60,16 @@ public class ProvedorCompativelComOpenAi implements ProvedorDeIa {
                 // nao da biblioteca. Com as duas ligadas, as tentativas se
                 // multiplicariam: 3 nossas x 4 do SDK = 12 requisicoes por falha.
                 .maxRetries(0)
-                .outputSchema(ESQUEMA)
-                .build();
+                .outputSchema(ESQUEMA);
+        if (propriedades.temEsforcoDeRaciocinio()) {
+            // Modelos que raciocinam antes de responder cobram esse raciocinio
+            // em tokens. Classificar um chamado em cinco categorias nao pede
+            // raciocinio longo, e no Groq o limite que aperta e o de tokens por
+            // minuto.
+            opcoes.reasoningEffort(propriedades.esforcoDeRaciocinio());
+        }
 
-        this.cliente = ChatClient.create(OpenAiChatModel.builder().options(opcoes).build());
+        this.cliente = ChatClient.create(OpenAiChatModel.builder().options(opcoes.build()).build());
     }
 
     @Override

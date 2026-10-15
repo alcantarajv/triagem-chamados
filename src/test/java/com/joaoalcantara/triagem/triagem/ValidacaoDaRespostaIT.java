@@ -25,6 +25,7 @@ import com.joaoalcantara.triagem.chamado.ChamadoRepositorio;
 import com.joaoalcantara.triagem.chamado.ChamadoServico;
 import com.joaoalcantara.triagem.chamado.StatusChamado;
 import com.joaoalcantara.triagem.infra.ProvedorFalso;
+import com.joaoalcantara.triagem.infra.AmbienteDeTeste;
 import com.joaoalcantara.triagem.infra.TesteDeIntegracao;
 
 /**
@@ -36,6 +37,9 @@ import com.joaoalcantara.triagem.infra.TesteDeIntegracao;
  */
 @TesteDeIntegracao
 class ValidacaoDaRespostaIT {
+
+    @Autowired
+    private AmbienteDeTeste ambiente;
 
     private static final String TEXTO = "Fui cobrado duas vezes pela mensalidade de outubro.";
     private static final String CORRECAO = "correcao";
@@ -54,8 +58,7 @@ class ValidacaoDaRespostaIT {
 
     @BeforeEach
     void limpar() {
-        repositorio.deleteAll();
-        gemini.resetAll();
+        ambiente.limpar();
     }
 
     /** Primeira requisicao recebe {@code primeira}; as seguintes, {@code depois}. */

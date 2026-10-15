@@ -35,6 +35,15 @@ public class FalhaNoProvedorException extends RuntimeException {
         return new FalhaNoProvedorException(provedor, descricao, false, null, causa);
     }
 
+    /**
+     * O circuito do provedor esta aberto: a chamada nem saiu. Nao e transitoria
+     * no sentido que importa aqui — tentar de novo daqui a um segundo daria o
+     * mesmo circuito aberto —, entao a vez passa direto para o proximo provedor.
+     */
+    public static FalhaNoProvedorException circuitoAberto(String provedor, Throwable causa) {
+        return new FalhaNoProvedorException(provedor, "circuito aberto, provedor pulado", false, null, causa);
+    }
+
     public String provedor() {
         return provedor;
     }

@@ -24,6 +24,7 @@ import com.joaoalcantara.triagem.chamado.ChamadoRepositorio;
 import com.joaoalcantara.triagem.chamado.ChamadoServico;
 import com.joaoalcantara.triagem.chamado.StatusChamado;
 import com.joaoalcantara.triagem.infra.ProvedorFalso;
+import com.joaoalcantara.triagem.infra.AmbienteDeTeste;
 import com.joaoalcantara.triagem.infra.TesteDeIntegracao;
 
 /**
@@ -36,6 +37,9 @@ import com.joaoalcantara.triagem.infra.TesteDeIntegracao;
  */
 @TesteDeIntegracao
 class TriagemConcorrenteIT {
+
+    @Autowired
+    private AmbienteDeTeste ambiente;
 
     private static final int CHAMADOS = 30;
     private static final int WORKERS = 4;
@@ -54,8 +58,7 @@ class TriagemConcorrenteIT {
 
     @BeforeEach
     void limpar() {
-        repositorio.deleteAll();
-        gemini.resetAll();
+        ambiente.limpar();
     }
 
     @Test

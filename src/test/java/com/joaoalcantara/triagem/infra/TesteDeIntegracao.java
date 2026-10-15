@@ -29,8 +29,9 @@ import org.springframework.context.annotation.Import;
 @SpringBootTest(properties = {
         "triagem.worker.habilitado=false",
         "triagem.provedores.gemini.tempo-limite=1s",
+        "triagem.provedores.groq.tempo-limite=1s",
         "triagem.repeticao.espera-inicial=100ms",
         "triagem.repeticao.espera-maxima=2s"})
-@Import({PostgresDeTeste.class, ProvedorFalso.class, RelogioAjustavel.class})
+@Import({PostgresDeTeste.class, ProvedorFalso.class, RelogioAjustavel.class, AmbienteDeTeste.class})
 public @interface TesteDeIntegracao {
 }

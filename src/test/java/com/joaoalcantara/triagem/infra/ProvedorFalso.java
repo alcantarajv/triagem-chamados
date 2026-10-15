@@ -18,42 +18,64 @@ import com.github.tomakehurst.wiremock.client.ResponseDefinitionBuilder;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * Um Gemini de mentira, servindo HTTP de verdade.
+ * Um Gemini e um Groq de mentira, servindo HTTP de verdade.
  *
- * <p>Sobe numa porta livre e registra a propria URL no lugar da do Gemini, para
- * que o adaptador aponte para ele sem saber que e um duble. O que fica
- * exercitado e o caminho inteiro: o SDK monta a requisicao, o WireMock responde
- * no formato da API de chat da OpenAI, e o Spring AI converte a resposta.</p>
+ * <p>Cada um sobe numa porta livre e registra a propria URL no lugar da do
+ * provedor real, para que o adaptador aponte para ele sem saber que e um duble.
+ * O que fica exercitado e o caminho inteiro: o SDK monta a requisicao, o
+ * WireMock responde no formato da API de chat da OpenAI, e o Spring AI converte
+ * a resposta.</p>
+ *
+ * <p>Dois servidores separados, e nao um so com caminhos diferentes: o teste do
+ * circuit breaker precisa contar as requisicoes que chegaram ao principal e ao
+ * fallback de forma independente.</p>
  *
  * <p>A alternativa — um {@code ProvedorDeIa} falso em memoria — seria mais
  * rapida, mas nao provaria nada sobre o que de fato vai pela rede: cabecalho de
  * autenticacao, esquema JSON, quantas requisicoes foram feitas. E esse ultimo
  * numero que sustenta os testes de nova tentativa, circuit breaker e cache.</p>
+ *
+ * <p>Um provedor sem resposta configurada devolve o 404 padrao do WireMock — uma
+ * falha definitiva. Assim, um teste que so prepara o Gemini ve o Groq falhar na
+ * hora, sem precisar dizer nada sobre ele.</p>
  */
 @TestConfiguration(proxyBeanMethods = false)
 public class ProvedorFalso {
 
     public static final String CHAVE = "chave-de-teste";
     public static final String MODELO = "modelo-de-teste";
+    public static final String MODELO_GROQ = "modelo-groq-de-teste";
     public static final String CAMINHO = "/chat/completions";
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     @Bean(destroyMethod = "stop")
-    WireMockServer geminiFalso() {
+    WireMockServer gemini() {
+        return servidorEmPortaLivre();
+    }
+
+    @Bean(destroyMethod = "stop")
+    WireMockServer groq() {
+        return servidorEmPortaLivre();
+    }
+
+    @Bean
+    DynamicPropertyRegistrar enderecosDosProvedoresFalsos(WireMockServer gemini, WireMockServer groq) {
+        return registro -> {
+            registro.add("triagem.provedores.gemini.url", gemini::baseUrl);
+            registro.add("triagem.provedores.gemini.chave", () -> CHAVE);
+            registro.add("triagem.provedores.gemini.modelo", () -> MODELO);
+            registro.add("triagem.provedores.groq.url", groq::baseUrl);
+            registro.add("triagem.provedores.groq.chave", () -> CHAVE);
+            registro.add("triagem.provedores.groq.modelo", () -> MODELO_GROQ);
+        };
+    }
+
+    private static WireMockServer servidorEmPortaLivre() {
         // dynamicPort: uma porta ocupada por outro processo nao derruba a suite.
         WireMockServer servidor = new WireMockServer(options().dynamicPort());
         servidor.start();
         return servidor;
-    }
-
-    @Bean
-    DynamicPropertyRegistrar enderecoDoGeminiFalso(WireMockServer geminiFalso) {
-        return registro -> {
-            registro.add("triagem.provedores.gemini.url", geminiFalso::baseUrl);
-            registro.add("triagem.provedores.gemini.chave", () -> CHAVE);
-            registro.add("triagem.provedores.gemini.modelo", () -> MODELO);
-        };
     }
 
     /** Requisicao de chat, como o adaptador a envia. */
