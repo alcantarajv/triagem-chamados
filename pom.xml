@@ -24,6 +24,8 @@
 		     empacota as dependencias internas com nomes proprios, evitando
 		     conflito entre o Jetty do WireMock e o do Spring. -->
 		<wiremock.version>3.13.1</wiremock.version>
+		<!-- Nao gerenciado pela BOM do Spring Boot. -->
+		<resilience4j.version>2.4.0</resilience4j.version>
 	</properties>
 
 	<dependencyManagement>
@@ -38,10 +40,6 @@
 		</dependencies>
 	</dependencyManagement>
 
-	<!--
-		Resilience4j ainda nao entra: chega na etapa em que e usado (5 e 6).
-		Versao conferida para o Boot 4.1.x: 2.4.0, modulo resilience4j-spring-boot4.
-	-->
 	<dependencies>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -77,6 +75,20 @@
 		<dependency>
 			<groupId>org.springframework.ai</groupId>
 			<artifactId>spring-ai-client-chat</artifactId>
+		</dependency>
+		<!--
+			Resilience4j, e nao os recursos de resiliencia do Spring Framework 7.
+			O RetryTemplate do Spring calcula a espera sem olhar a falha
+			(BackOffExecution.nextBackOff() nao recebe a excecao), entao nao ha como
+			esperar o que o Retry-After de cada 429 pede; o Resilience4j recebe a
+			falha no calculo do intervalo. E o Spring 7 nao tem circuit breaker,
+			que a Etapa 6 precisa. Modulos do nucleo, sem o starter: cada provedor
+			monta as suas instancias com configuracao propria, como os ChatModels.
+		-->
+		<dependency>
+			<groupId>io.github.resilience4j</groupId>
+			<artifactId>resilience4j-retry</artifactId>
+			<version>${resilience4j.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>org.flywaydb</groupId>

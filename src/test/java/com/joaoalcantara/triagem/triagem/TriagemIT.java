@@ -99,9 +99,9 @@ class TriagemIT {
     }
 
     @Test
-    @DisplayName("erro 500 manda o chamado para triagem manual com uma unica requisicao: nem o SDK repete escondido, nem a correcao de resposta invalida se aplica a quem nao respondeu")
-    void erroDoProvedorSemRepeticaoEscondida() {
-        gemini.stubFor(ProvedorFalso.chat().willReturn(aResponse().withStatus(500)));
+    @DisplayName("erro 400 manda o chamado para triagem manual com uma unica requisicao: nao se repete o que foi recusado, nem se pede correcao a quem nao respondeu")
+    void erroDefinitivoSemRepeticao() {
+        gemini.stubFor(ProvedorFalso.chat().willReturn(aResponse().withStatus(400)));
         UUID id = servico.registrar(TEXTO).getId();
 
         triador.processarProximo();

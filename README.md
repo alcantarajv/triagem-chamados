@@ -4,7 +4,7 @@ API REST que recebe chamados de suporte em texto livre e usa um modelo de lingua
 
 O que este projeto resolve não é o prompt. É a engenharia de backend em volta de uma dependência que **demora, falha, cobra por uso e às vezes responde algo fora do combinado**.
 
-> **Status:** em construção — Etapa 4 de 13. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 5 de 13. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -107,7 +107,45 @@ Sem o starter do Spring AI: ele cria um único modelo a partir de `spring.ai.ope
 
 ### O SDK não repete chamadas escondido
 
-O Spring AI 2.0 usa o SDK oficial da OpenAI, que por padrão **repete até três vezes** uma chamada que falhou, sem a aplicação ficar sabendo. Desligado (`maxRetries(0)`): quantas vezes repetir, e diante de qual erro, é decisão da aplicação, não da biblioteca. Um teste comprova que um `500` do provedor gera exatamente **uma** requisição — com o padrão do SDK, o mesmo teste registra quatro.
+O Spring AI 2.0 usa o SDK oficial da OpenAI, que por padrão **repete até três vezes** uma chamada que falhou, sem a aplicação ficar sabendo. Desligado (`maxRetries(0)`): quantas vezes repetir, e diante de qual erro, é decisão da aplicação, não da biblioteca — e, com as duas políticas ligadas, as tentativas se multiplicariam. Um teste comprova que três falhas seguidas geram exatamente **três** requisições. Quando essa proteção foi verificada pela primeira vez, religando o padrão do SDK, um único `500` virou quatro requisições.
+
+### Repetir com critério: só o que é transitório, e esperando o que o provedor pediu
+
+Toda chamada ao provedor tem **tempo limite** (15s; o padrão do SDK é 60s) e passa pelo `ProvedorComRepeticao`, que decide se vale tentar de novo:
+
+| Falha | Repete? | Por quê |
+|---|---|---|
+| Tempo esgotado, conexão perdida | sim | o problema está no caminho e pode passar |
+| `500`, `502`, `503`, `504`, `408` | sim | o provedor está com problema, e pode se recuperar |
+| `429` | sim, depois da espera pedida | a cota volta, mas só na hora que o provedor disser |
+| `400`, `401`, `403`, `404`, `422` | **não** | a requisição foi recusada pelo que ela é; repetir dá a mesma recusa |
+| Resposta inválida | não aqui | é outra política: a correção com o erro, descrita acima |
+
+São três tentativas no total, com **espera crescente** (1s, depois 2s) e **variação aleatória** de 50%. A espera fixa martela um provedor que já está sobrecarregado, e sem a variação várias instâncias que falharam juntas tentariam de novo juntas.
+
+Quando o provedor diz quanto esperar, a espera dele substitui a crescente — tentar antes da hora só gasta cota para receber outro `429`. E se ele pedir mais que a **espera máxima** (10s), não se espera nem se repete: o worker não fica parado com o chamado na mão, e a falha segue adiante na hora (para o próximo provedor, a partir da Etapa 6).
+
+**O Gemini não manda `Retry-After`.** O `429` real, provocado com uma rajada contra o plano gratuito (15 requisições por minuto), chega sem esse cabeçalho; a espera vem no corpo, no formato de erro das APIs do Google:
+
+```json
+[{"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "details": [
+  {"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [{"quotaValue": "15"}]},
+  {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "26s"}]}}]
+```
+
+Por isso a espera é lida do cabeçalho `Retry-After` e, na falta dele, do `retryDelay` do corpo. Sem essa leitura, o `429` do Gemini cairia na espera crescente: duas novas tentativas em 1s e 2s quando ele pediu 26s, e mais dois `429`.
+
+Os testes medem os intervalos pelo horário em que cada requisição chegou ao WireMock: com `Retry-After: 1`, a segunda tentativa chega pelo menos 1s depois da primeira — ignorando o cabeçalho, chegaria em cerca de 100ms, e o teste falha; com `retryDelay` de 26s, há uma única requisição; um provedor que demora 5s é abandonado no tempo limite; e cada `4xx` gera exatamente uma requisição.
+
+### Resilience4j, e não os recursos de resiliência do Spring Framework 7
+
+O Spring Framework 7 trouxe `@Retryable` e `RetryTemplate` para o núcleo, e seria natural usá-los. Mas o cálculo da espera no Spring (`BackOffExecution.nextBackOff()`) não recebe a falha que aconteceu, então não há como esperar o que cada `429` pede. O `IntervalBiFunction` do Resilience4j recebe a falha. E o Spring 7 não tem circuit breaker, que a Etapa 6 precisa: escolher o Spring agora significaria duas bibliotecas de resiliência depois. A escolha estava prevista para a Etapa 6, mas a Etapa 5 já não conseguia cumprir o que promete sem ela.
+
+Os módulos são os do núcleo (`resilience4j-retry`), sem o starter: cada provedor monta as próprias instâncias com configuração própria, como os modelos do Spring AI.
+
+### A reserva do worker cobre a triagem mais demorada, e a aplicação confere
+
+Repetir alonga a triagem, e a reserva do chamado precisa durar mais que ela — se vencer no meio, outro worker pega o mesmo chamado e o provedor é pago duas vezes. O pior caso é **2 chamadas** (pedido e correção) × (**3 tentativas** × **15s** + **2 esperas** de até **10s**) = **130s**, e a reserva é de 3 minutos. Os três números moram em lugares diferentes da configuração, e mudar um sem os outros é fácil; a `ConferenciaDaReserva` refaz a conta na largada e **recusa subir** se ela não fechar, explicando qual número mexer.
 
 ### Saída estruturada nativa
 
@@ -158,7 +196,7 @@ Sem `GEMINI_API_KEY`, a aplicação sobe, avisa no log e continua recebendo cham
 
 ### Cada dependência entra na etapa em que é usada
 
-O Spring AI entrou na Etapa 3, junto com o primeiro provedor; o Resilience4j entra com a política de resiliência. Dependência sem código que a use só acrescenta configuração automática e superfície de falha.
+O Spring AI entrou na Etapa 3, junto com o primeiro provedor; o Resilience4j, na Etapa 5, com a primeira política de resiliência. Dependência sem código que a use só acrescenta configuração automática e superfície de falha.
 
 ### O schema pertence ao Flyway, não ao Hibernate
 
@@ -289,8 +327,11 @@ Os testes são a prova do argumento central. O WireMock faz o papel dos provedor
 |---|---|---|
 | Vários workers ao mesmo tempo | cada chamado é triado uma única vez, com uma requisição por texto | comprovado (`TriagemConcorrenteIT`) |
 | Provedor responde `500` | o chamado vai para triagem manual com uma única requisição, sem repetição escondida | comprovado (`TriagemIT`) |
-| Provedor principal demora mais que o tempo limite | o secundário responde e o chamado fica triado | Etapas 5 e 6 |
-| Principal responde `429` com `Retry-After` | a nova tentativa respeita a espera ou passa para o secundário | Etapa 5 |
+| Provedor demora mais que o tempo limite | a chamada é abandonada no tempo limite e a nova tentativa resolve; sempre lento, três tentativas e triagem manual | comprovado (`RepeticaoIT`) |
+| Provedor responde `5xx` ou `408` | nova tentativa com espera crescente; três falhas, exatamente três requisições | comprovado (`RepeticaoIT`) |
+| Provedor responde `4xx` de requisição inválida | uma única requisição, sem repetição | comprovado (`RepeticaoIT`) |
+| Provedor responde `429` com `Retry-After` ou `retryDelay` | a nova tentativa espera o que foi pedido; se o pedido passa da espera máxima, uma única requisição | comprovado (`RepeticaoIT`) |
+| Principal lento ou com cota esgotada | o secundário responde e o chamado fica triado | Etapa 6 |
 | Provedor responde JSON inválido ou categoria inexistente | há exatamente uma nova tentativa, com o erro no pedido; se continuar inválido, triagem manual, sem terceira chamada | comprovado (`ValidacaoDaRespostaIT`) |
 | Principal continua inválido depois da correção | o próximo provedor é consultado | Etapa 6 |
 | Todos os provedores fora | o chamado fica pendente de triagem manual e a API não responde 500 | Etapa 7 |
@@ -312,7 +353,7 @@ Java 21 · Spring Boot 4 · Spring AI · Google Gemini · Groq · PostgreSQL · 
 - [x] **Etapa 2** — Domínio sem IA: `Chamado`, estados, Flyway, `POST` (202) e `GET`, Problem Details
 - [x] **Etapa 3** — Primeiro provedor (Gemini) com saída estruturada e worker assíncrono com `SKIP LOCKED`
 - [x] **Etapa 4** — Validação da saída do modelo, com uma nova tentativa informando o erro
-- [ ] **Etapa 5** — Tempo limite e nova tentativa só para erros transitórios, respeitando o `Retry-After`
+- [x] **Etapa 5** — Tempo limite e nova tentativa só para erros transitórios, respeitando o `Retry-After`
 - [ ] **Etapa 6** — Segundo provedor (Groq), cadeia de fallback e circuit breaker por provedor
 - [ ] **Etapa 7** — Degradação: triagem manual quando todos os provedores falham e job de nova tentativa
 - [ ] **Etapa 8** — Controle de custo: cache por texto normalizado, limite por cliente e orçamento diário

@@ -1,5 +1,6 @@
 package com.joaoalcantara.triagem.provedor;
 
+import java.time.Clock;
 import java.util.List;
 import java.util.function.Supplier;
 
@@ -35,9 +36,11 @@ public class ProvedorCompativelComOpenAi implements ProvedorDeIa {
 
     private final String nome;
     private final ChatClient cliente;
+    private final Clock relogio;
 
-    public ProvedorCompativelComOpenAi(String nome, PropriedadesDoProvedor propriedades) {
+    public ProvedorCompativelComOpenAi(String nome, PropriedadesDoProvedor propriedades, Clock relogio) {
         this.nome = nome;
+        this.relogio = relogio;
 
         OpenAiChatOptions opcoes = OpenAiChatOptions.builder()
                 .baseUrl(propriedades.url())
@@ -47,12 +50,15 @@ public class ProvedorCompativelComOpenAi implements ProvedorDeIa {
                 // contexto sobe sem chave, que e o que o CI precisa.
                 .apiKey(propriedades.temChave() ? propriedades.chave() : "")
                 .model(propriedades.modelo())
+                // Tempo limite da chamada inteira, nao so da conexao: um provedor
+                // que aceita a conexao e demora a responder e justamente o caso
+                // que importa. O padrao do SDK e 60 segundos.
                 .timeout(propriedades.tempoLimite())
                 // O SDK da OpenAI repete sozinho ate 3 vezes por padrao, sem que a
                 // aplicacao fique sabendo. Desligado: quantas vezes repetir, e
-                // diante de qual erro, e decisao desta aplicacao (Etapa 5), nao
-                // da biblioteca. Repeticao invisivel e o defeito 3 do problema
-                // central.
+                // diante de qual erro, e decisao da aplicacao (ProvedorComRepeticao),
+                // nao da biblioteca. Com as duas ligadas, as tentativas se
+                // multiplicariam: 3 nossas x 4 do SDK = 12 requisicoes por falha.
                 .maxRetries(0)
                 .outputSchema(ESQUEMA)
                 .build();
@@ -101,7 +107,7 @@ public class ProvedorCompativelComOpenAi implements ProvedorDeIa {
         try {
             return chamada.get();
         } catch (RuntimeException e) {
-            throw new FalhaNoProvedorException(nome, e);
+            throw TradutorDeFalhas.traduzir(nome, e, relogio);
         }
     }
 }
