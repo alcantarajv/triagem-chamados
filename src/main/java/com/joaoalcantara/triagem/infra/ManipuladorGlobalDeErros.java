@@ -20,6 +20,7 @@ import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 import com.joaoalcantara.triagem.chamado.ChamadoNaoEncontradoException;
+import com.joaoalcantara.triagem.custo.LimiteDeChamadosExcedidoException;
 
 /**
  * Traduz excecoes em respostas no formato Problem Details (RFC 9457).
@@ -46,6 +47,22 @@ public class ManipuladorGlobalDeErros extends ResponseEntityExceptionHandler {
     @ExceptionHandler(ChamadoNaoEncontradoException.class)
     public ProblemDetail trataChamadoNaoEncontrado(ChamadoNaoEncontradoException e) {
         return problema(HttpStatus.NOT_FOUND, "chamado-nao-encontrado", "Chamado nao encontrado", e.getMessage());
+    }
+
+    /**
+     * Limite de chamados por cliente atingido: 429, com {@code Retry-After}.
+     *
+     * <p>O mesmo cabecalho que esta aplicacao respeita quando o provedor de IA o
+     * manda: diz ao cliente quando a janela vira, em vez de deixa-lo tentar a
+     * esmo ate passar.</p>
+     */
+    @ExceptionHandler(LimiteDeChamadosExcedidoException.class)
+    public ResponseEntity<ProblemDetail> trataLimiteExcedido(LimiteDeChamadosExcedidoException e) {
+        long segundos = Math.max(1, e.esperar().toSeconds());
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(HttpHeaders.RETRY_AFTER, String.valueOf(segundos))
+                .body(problema(HttpStatus.TOO_MANY_REQUESTS, "limite-de-chamados", "Limite de chamados atingido",
+                        e.getMessage()));
     }
 
     /**

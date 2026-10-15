@@ -10,6 +10,8 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.joaoalcantara.triagem.custo.OrcamentoDiario;
+
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.SlidingWindowType;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -46,7 +48,11 @@ public class ConfiguracaoDosProvedores {
                 .failureRateThreshold(100)
                 .waitDurationInOpenState(propriedades.tempoAberto())
                 .permittedNumberOfCallsInHalfOpenState(1)
-                .recordException(erro -> erro instanceof FalhaNoProvedorException)
+                .recordException(erro -> erro instanceof FalhaNoProvedorException falha && falha.falhaDoProvedor())
+                // No Resilience4j, excecao que nao conta como falha conta como
+                // sucesso. Orcamento esgotado nao e nem uma coisa nem outra: sem o
+                // ignore, ele fecharia um circuito aberto por falhas de verdade.
+                .ignoreException(erro -> erro instanceof FalhaNoProvedorException falha && !falha.falhaDoProvedor())
                 .clock(relogio)
                 .build();
         return CircuitBreakerRegistry.of(configuracao);
@@ -54,7 +60,7 @@ public class ConfiguracaoDosProvedores {
 
     /**
      * Monta a cadeia: cada provedor com nova tentativa por fora, circuit breaker
-     * por dentro e o cliente HTTP no centro.
+     * e orcamento diario por dentro, e o cliente HTTP no centro.
      *
      * <p>Provedor sem chave fica fora da cadeia, com um aviso: incluido, ele
      * gastaria uma requisicao fadada ao 401 em todo chamado, e o circuito dele
@@ -65,7 +71,7 @@ public class ConfiguracaoDosProvedores {
      */
     @Bean
     ProvedoresDeIa provedoresDeIa(PropriedadesDosProvedores provedores, PropriedadesDaRepeticao repeticao,
-                                  CircuitBreakerRegistry disjuntores, Clock relogio) {
+                                  CircuitBreakerRegistry disjuntores, OrcamentoDiario orcamento, Clock relogio) {
         List<ProvedorDeIa> cadeia = new ArrayList<>();
         provedores.emOrdem().forEach((nome, propriedades) -> {
             if (!propriedades.temChave()) {
@@ -73,7 +79,9 @@ public class ConfiguracaoDosProvedores {
                 return;
             }
             ProvedorDeIa cliente = new ProvedorCompativelComOpenAi(nome, propriedades, relogio);
-            ProvedorDeIa comDisjuntor = new ProvedorComDisjuntor(cliente, disjuntores.circuitBreaker(nome));
+            ProvedorDeIa comOrcamento = new ProvedorComOrcamento(cliente, orcamento,
+                    propriedades.orcamentoDiario(), propriedades.fusoDoOrcamento());
+            ProvedorDeIa comDisjuntor = new ProvedorComDisjuntor(comOrcamento, disjuntores.circuitBreaker(nome));
             cadeia.add(new ProvedorComRepeticao(comDisjuntor, repeticao));
         });
         if (cadeia.isEmpty()) {

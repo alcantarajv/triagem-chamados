@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import com.joaoalcantara.triagem.chamado.Classificacao;
+import com.joaoalcantara.triagem.custo.CacheDeClassificacao;
 import com.joaoalcantara.triagem.provedor.FalhaNoProvedorException;
 import com.joaoalcantara.triagem.provedor.ProvedorDeIa;
 import com.joaoalcantara.triagem.provedor.ProvedoresDeIa;
@@ -38,18 +39,22 @@ public class ClassificadorComValidacao {
 
     private final ProvedoresDeIa provedores;
     private final ValidadorDeClassificacao validador;
+    private final CacheDeClassificacao cache;
 
-    public ClassificadorComValidacao(ProvedoresDeIa provedores, ValidadorDeClassificacao validador) {
+    public ClassificadorComValidacao(ProvedoresDeIa provedores, ValidadorDeClassificacao validador,
+                                     CacheDeClassificacao cache) {
         this.provedores = provedores;
         this.validador = validador;
+        this.cache = cache;
     }
 
     /**
-     * Classificacao aceita, o provedor que a produziu e os que falharam antes
-     * dele. {@code provedoresQueFalharam} vazio significa que o principal
-     * resolveu; qualquer outra coisa e fallback.
+     * Classificacao aceita, o provedor que a produziu, os que falharam antes
+     * dele e se ela veio do cache. {@code provedoresQueFalharam} vazio significa
+     * que o principal resolveu; qualquer outra coisa e fallback.
      */
-    public record TriagemObtida(Classificacao classificacao, String provedor, List<String> provedoresQueFalharam) {
+    public record TriagemObtida(Classificacao classificacao, String provedor, List<String> provedoresQueFalharam,
+                                boolean doCache) {
 
         public TriagemObtida {
             provedoresQueFalharam = List.copyOf(provedoresQueFalharam);
@@ -61,15 +66,24 @@ public class ClassificadorComValidacao {
     }
 
     /**
+     * Consulta o cache antes de qualquer provedor: texto ja classificado nao
+     * custa outra chamada. So o que passou na validacao vai para o cache.
+     *
      * @throws TodosOsProvedoresFalharamException se nenhum provedor resolver
      */
     public TriagemObtida classificar(String texto) {
+        var guardada = cache.buscar(texto);
+        if (guardada.isPresent()) {
+            return new TriagemObtida(guardada.get().classificacao(), guardada.get().provedor(), List.of(), true);
+        }
+
         List<String> falharam = new ArrayList<>();
         List<String> motivos = new ArrayList<>();
         for (ProvedorDeIa provedor : provedores.emOrdem()) {
             try {
                 Classificacao classificacao = classificarCom(provedor, texto);
-                return new TriagemObtida(classificacao, provedor.nome(), falharam);
+                cache.guardar(texto, classificacao, provedor.nome());
+                return new TriagemObtida(classificacao, provedor.nome(), falharam, false);
             } catch (FalhaNoProvedorException | RespostaInvalidaException e) {
                 log.warn("Provedor {} nao resolveu, passando a vez: {}", provedor.nome(), e.getMessage());
                 falharam.add(provedor.nome());

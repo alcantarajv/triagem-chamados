@@ -13,6 +13,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.time.Instant;
 import java.util.UUID;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,6 +24,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import com.jayway.jsonpath.JsonPath;
+import com.joaoalcantara.triagem.infra.AmbienteDeTeste;
 import com.joaoalcantara.triagem.infra.TesteDeIntegracao;
 
 /** Registro e consulta de chamados pela API, contra um PostgreSQL de verdade. */
@@ -33,10 +35,20 @@ class ChamadoIT {
     private static final String TEXTO = "Nao consigo emitir a segunda via do boleto pelo aplicativo.";
 
     @Autowired
+    private AmbienteDeTeste ambiente;
+
+    @Autowired
     private MockMvc mockMvc;
 
     @Autowired
     private ChamadoRepositorio repositorio;
+
+    @BeforeEach
+    void limpar() {
+        // Tambem zera o limite por cliente: todas as requisicoes deste teste
+        // saem do mesmo endereco.
+        ambiente.limpar();
+    }
 
     private MvcResult registrar(String corpo) throws Exception {
         return mockMvc.perform(post("/api/chamados")

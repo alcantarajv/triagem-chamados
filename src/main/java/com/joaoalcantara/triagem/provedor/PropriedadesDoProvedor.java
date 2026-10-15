@@ -1,6 +1,7 @@
 package com.joaoalcantara.triagem.provedor;
 
 import java.time.Duration;
+import java.time.ZoneId;
 
 /**
  * Configuracao de um provedor com API compativel com a da OpenAI.
@@ -11,9 +12,11 @@ import java.time.Duration;
  * @param tempoLimite         tempo maximo de uma chamada
  * @param esforcoDeRaciocinio {@code reasoning_effort} enviado ao modelo, para os
  *                            que raciocinam antes de responder; vazio para nao enviar
+ * @param orcamentoDiario     requisicoes permitidas por dia, um pouco abaixo da cota do provedor
+ * @param fusoDoOrcamento     fuso em que o provedor vira o dia da cota
  */
 public record PropriedadesDoProvedor(String url, String chave, String modelo, Duration tempoLimite,
-                                     String esforcoDeRaciocinio) {
+                                     String esforcoDeRaciocinio, int orcamentoDiario, ZoneId fusoDoOrcamento) {
 
     public boolean temChave() {
         return chave != null && !chave.isBlank();

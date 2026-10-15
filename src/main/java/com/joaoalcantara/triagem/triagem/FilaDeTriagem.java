@@ -79,12 +79,12 @@ public class FilaDeTriagem {
     }
 
     @Transactional
-    public void registrarTriagem(UUID id, Classificacao classificacao, String provedor) {
+    public void registrarTriagem(UUID id, Classificacao classificacao, String provedor, boolean doCache) {
         Chamado chamado = repositorio.buscarParaAtualizar(id).orElseThrow();
         if (!aindaEsperaTriagem(chamado)) {
             return;
         }
-        chamado.registrarTriagem(classificacao, provedor, relogio.instant());
+        chamado.registrarTriagem(classificacao, provedor, doCache, relogio.instant());
     }
 
     /** A rodada falhou: o chamado fica pendente, com ou sem nova tentativa agendada. */

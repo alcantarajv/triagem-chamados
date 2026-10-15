@@ -96,6 +96,10 @@ public class Chamado {
     @Column(name = "proxima_tentativa_em")
     private Instant proximaTentativaEm;
 
+    /** A classificacao foi reaproveitada de outro chamado com o mesmo texto, sem chamar provedor. */
+    @Column(name = "veio_do_cache", nullable = false)
+    private boolean veioDoCache;
+
     protected Chamado() {
         // exigido pelo JPA
     }
@@ -110,9 +114,15 @@ public class Chamado {
         this.reservadoAte = Objects.requireNonNull(limite, "limite");
     }
 
-    /** Aplica o resultado da triagem automatica e encerra a reserva. */
-    public void registrarTriagem(Classificacao classificacao, String provedor, Instant agora) {
+    /**
+     * Aplica o resultado da triagem automatica e encerra a reserva.
+     *
+     * @param provedor quem classificou; quando {@code doCache}, quem classificou
+     *                 originalmente o texto que ficou guardado
+     */
+    public void registrarTriagem(Classificacao classificacao, String provedor, boolean doCache, Instant agora) {
         mudarPara(StatusChamado.TRIADO);
+        this.veioDoCache = doCache;
         this.categoria = Objects.requireNonNull(classificacao.categoria(), "categoria");
         this.prioridade = Objects.requireNonNull(classificacao.prioridade(), "prioridade");
         this.resumo = Objects.requireNonNull(classificacao.resumo(), "resumo");
@@ -201,5 +211,9 @@ public class Chamado {
 
     public Instant getProximaTentativaEm() {
         return proximaTentativaEm;
+    }
+
+    public boolean isVeioDoCache() {
+        return veioDoCache;
     }
 }

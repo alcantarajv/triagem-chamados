@@ -23,11 +23,17 @@ public record ChamadoResposta(
         TriagemResposta triagem,
         Instant proximaTentativaAutomatica) {
 
+    /**
+     * @param doCache a classificacao foi reaproveitada de um texto igual, sem
+     *                chamar provedor; {@code provedor} e entao quem o classificou
+     *                originalmente
+     */
     public record TriagemResposta(
             Categoria categoria,
             Prioridade prioridade,
             String resumo,
             String provedor,
+            boolean doCache,
             Instant triadoEm) {
     }
 
@@ -38,6 +44,7 @@ public record ChamadoResposta(
                         chamado.getPrioridade(),
                         chamado.getResumo(),
                         chamado.getProvedor(),
+                        chamado.isVeioDoCache(),
                         chamado.getTriadoEm());
 
         return new ChamadoResposta(

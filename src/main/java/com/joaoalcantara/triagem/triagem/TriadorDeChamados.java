@@ -70,8 +70,11 @@ public class TriadorDeChamados {
     private void triar(ChamadoReservado chamado) {
         try {
             TriagemObtida triagem = classificador.classificar(chamado.texto());
-            fila.registrarTriagem(chamado.id(), triagem.classificacao(), triagem.provedor());
-            if (triagem.houveFallback()) {
+            fila.registrarTriagem(chamado.id(), triagem.classificacao(), triagem.provedor(), triagem.doCache());
+            if (triagem.doCache()) {
+                log.info("Chamado {} triado pelo cache (classificacao original de {})", chamado.id(),
+                        triagem.provedor());
+            } else if (triagem.houveFallback()) {
                 log.info("Chamado {} triado por {}, depois de falha em {}", chamado.id(), triagem.provedor(),
                         triagem.provedoresQueFalharam());
             } else {

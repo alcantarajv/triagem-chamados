@@ -24,7 +24,7 @@ class ChamadoTest {
         Chamado chamado = new Chamado("texto", AGORA);
         chamado.reservarAte(AGORA.plusSeconds(120));
 
-        chamado.registrarTriagem(CLASSIFICACAO, "gemini", AGORA);
+        chamado.registrarTriagem(CLASSIFICACAO, "gemini", false, AGORA);
 
         assertThat(chamado.getStatus()).isEqualTo(StatusChamado.TRIADO);
         assertThat(chamado.getCategoria()).isEqualTo(Categoria.ACESSO);
@@ -36,9 +36,9 @@ class ChamadoTest {
     @DisplayName("chamado triado nao pode ser triado de novo")
     void naoTriaDuasVezes() {
         Chamado chamado = new Chamado("texto", AGORA);
-        chamado.registrarTriagem(CLASSIFICACAO, "gemini", AGORA);
+        chamado.registrarTriagem(CLASSIFICACAO, "gemini", false, AGORA);
 
-        assertThatThrownBy(() -> chamado.registrarTriagem(CLASSIFICACAO, "gemini", AGORA))
+        assertThatThrownBy(() -> chamado.registrarTriagem(CLASSIFICACAO, "gemini", false, AGORA))
                 .isInstanceOf(TransicaoInvalidaException.class);
     }
 
@@ -46,7 +46,7 @@ class ChamadoTest {
     @DisplayName("chamado triado nao registra falha de triagem")
     void triadoNaoRegistraFalha() {
         Chamado chamado = new Chamado("texto", AGORA);
-        chamado.registrarTriagem(CLASSIFICACAO, "gemini", AGORA);
+        chamado.registrarTriagem(CLASSIFICACAO, "gemini", false, AGORA);
 
         assertThatThrownBy(() -> chamado.registrarFalhaDaTriagem(AGORA, ESPERAS))
                 .isInstanceOf(TransicaoInvalidaException.class);
@@ -102,7 +102,7 @@ class ChamadoTest {
         Chamado chamado = new Chamado("texto", AGORA);
         chamado.registrarFalhaDaTriagem(AGORA, ESPERAS);
 
-        chamado.registrarTriagem(CLASSIFICACAO, "groq", AGORA.plus(Duration.ofMinutes(5)));
+        chamado.registrarTriagem(CLASSIFICACAO, "groq", false, AGORA.plus(Duration.ofMinutes(5)));
 
         assertThat(chamado.getStatus()).isEqualTo(StatusChamado.TRIADO);
         assertThat(chamado.getProximaTentativaEm()).isNull();

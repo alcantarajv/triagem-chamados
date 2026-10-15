@@ -11,6 +11,10 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.joaoalcantara.triagem.custo.IdentificadorDeCliente;
+import com.joaoalcantara.triagem.custo.LimiteDeChamadosPorCliente;
+
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 
 @RestController
@@ -18,9 +22,14 @@ import jakarta.validation.Valid;
 public class ChamadoController {
 
     private final ChamadoServico servico;
+    private final LimiteDeChamadosPorCliente limite;
+    private final IdentificadorDeCliente identificador;
 
-    public ChamadoController(ChamadoServico servico) {
+    public ChamadoController(ChamadoServico servico, LimiteDeChamadosPorCliente limite,
+                             IdentificadorDeCliente identificador) {
         this.servico = servico;
+        this.limite = limite;
+        this.identificador = identificador;
     }
 
     /**
@@ -30,9 +39,15 @@ public class ChamadoController {
      * de verdade — a triagem — ainda nao aconteceu. O 202 diz exatamente isso:
      * "recebi, vou processar". O cabecalho {@code Location} aponta para onde
      * acompanhar o resultado.</p>
+     *
+     * <p>O limite por cliente e conferido aqui, e nao no servico: e o endereco IP
+     * da requisicao HTTP que identifica o cliente. Corpo invalido e recusado pelo
+     * {@code @Valid} antes de chegar a este metodo, e nao gasta o limite.</p>
      */
     @PostMapping
-    public ResponseEntity<ChamadoResposta> registrar(@Valid @RequestBody NovoChamado novo) {
+    public ResponseEntity<ChamadoResposta> registrar(@Valid @RequestBody NovoChamado novo,
+                                                     HttpServletRequest requisicao) {
+        limite.consumir(identificador.enderecoDe(requisicao));
         ChamadoResposta corpo = ChamadoResposta.de(servico.registrar(novo.texto()));
         return ResponseEntity
                 .accepted()

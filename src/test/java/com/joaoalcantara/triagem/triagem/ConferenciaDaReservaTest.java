@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
+import java.time.ZoneId;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -16,7 +17,8 @@ import com.joaoalcantara.triagem.provedor.PropriedadesDosProvedores;
 class ConferenciaDaReservaTest {
 
     private static final PropriedadesDoProvedor PROVEDOR =
-            new PropriedadesDoProvedor("http://provedor", "chave", "modelo", Duration.ofSeconds(15), null);
+            new PropriedadesDoProvedor("http://provedor", "chave", "modelo", Duration.ofSeconds(15), null, 450,
+                    ZoneId.of("UTC"));
     private static final PropriedadesDosProvedores PROVEDORES = new PropriedadesDosProvedores(PROVEDOR, PROVEDOR);
     private static final PropriedadesDaRepeticao REPETICAO =
             new PropriedadesDaRepeticao(3, Duration.ofSeconds(1), Duration.ofSeconds(10));

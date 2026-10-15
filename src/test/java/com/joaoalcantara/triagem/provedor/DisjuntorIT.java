@@ -80,8 +80,15 @@ class DisjuntorIT {
                 .withBody("{\"error\":{\"message\":\"indisponivel\",\"code\":503}}");
     }
 
+    private int triagens;
+
+    /**
+     * Texto diferente a cada triagem: com o mesmo texto, a partir da primeira
+     * classificacao bem-sucedida o cache responderia, e nenhum provedor seria
+     * chamado — o teste deixaria de exercitar o circuito.
+     */
     private Chamado triar() {
-        UUID id = servico.registrar("O relatorio mensal nao abre desde ontem.").getId();
+        UUID id = servico.registrar("O relatorio mensal nao abre desde ontem (%d).".formatted(++triagens)).getId();
         triador.processarProximo();
         return repositorio.findById(id).orElseThrow();
     }

@@ -4,7 +4,7 @@ API REST que recebe chamados de suporte em texto livre e usa um modelo de lingua
 
 O que este projeto resolve não é o prompt. É a engenharia de backend em volta de uma dependência que **demora, falha, cobra por uso e às vezes responde algo fora do combinado**.
 
-> **Status:** em construção — Etapa 7 de 13. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 8 de 13. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -144,11 +144,46 @@ Sem circuit breaker, um provedor fora do ar custa a cada chamado o tempo limite 
 Um circuito **por provedor**: o Gemini fora do ar não pode tirar o Groq da cadeia. E o circuito fica **dentro** da nova tentativa, contando cada tentativa: do lado de fora, uma triagem com três tentativas fracassadas contaria como uma falha só, e o circuito levaria três vezes mais requisições inúteis para abrir. A pilha de cada provedor, de fora para dentro:
 
 ```
-ProvedorComRepeticao  →  ProvedorComDisjuntor  →  ProvedorCompativelComOpenAi
- (novas tentativas)       (circuit breaker)        (HTTP com tempo limite)
+ProvedorComRepeticao  →  ProvedorComDisjuntor  →  ProvedorComOrcamento  →  ProvedorCompativelComOpenAi
+ (novas tentativas)       (circuit breaker)        (orçamento diário)       (HTTP com tempo limite)
 ```
 
 O teste do circuito aberto confere no WireMock **zero** requisições novas ao Gemini enquanto cinco chamados seguidos são triados pelo Groq — e, com o disjuntor desligado de propósito, cinco dos seis testes do circuito falham. A janela de um minuto passa no relógio da aplicação, que o teste avança: nada de esperar de verdade para provar que, depois dela, uma única chamada de teste fecha o circuito ou o reabre.
+
+### Cache da classificação por texto normalizado
+
+O mesmo texto não gera outra chamada ao provedor. Antes de qualquer provedor, a triagem consulta o cache; achando, o chamado é triado com a classificação guardada, e a API mostra `"doCache": true` — com `provedor` dizendo quem classificou originalmente.
+
+A chave é o SHA-256 do texto **normalizado**: sem diferença entre maiúsculas e minúsculas, sem acentos e sem espaços sobrando, então "Não consigo  ACESSAR" e "nao consigo acessar" caem na mesma entrada. A normalização para aí, de propósito: tirar pontuação, ordenar palavras ou corrigir grafia começaria a juntar textos diferentes, e um acerto de cache errado é pior que uma chamada a mais — entrega a classificação de outro chamado.
+
+Três detalhes do desenho:
+
+- **O texto não fica no cache, só o hash.** Uma cópia a mais do chamado seria uma cópia a mais de dado possivelmente pessoal, e o hash basta para reconhecer o mesmo texto. Um teste confere que nenhuma coluna da tabela contém o texto.
+- **A chave inclui uma impressão digital das instruções enviadas ao modelo.** Mudou o prompt, as classificações antigas deixam de casar sozinhas, sem depender de alguém lembrar de limpar o cache.
+- **No banco, e não em memória.** Com mais de uma instância, cada uma pagaria pelo mesmo texto uma vez; e no plano gratuito do Render, que hiberna a aplicação ociosa, cada reinício jogaria o cache fora. Validade de 30 dias.
+
+Só entra no cache o que passou na validação; falha não é guardada. Dois chamados idênticos triados no mesmo instante podem, os dois, não achar nada e pagar duas chamadas: evitar isso exigiria travar a chave durante a chamada ao provedor, que é justamente o que a fila evita. O caso é raro, e o custo é uma requisição.
+
+O teste central conta as requisições ao WireMock: o mesmo texto duas vezes dá **uma** requisição, e a segunda triagem vem do cache — com a consulta ao cache desligada de propósito, o teste falha. Na aplicação real, um segundo chamado com o mesmo texto em maiúsculas e com espaços sobrando foi triado pelo cache, e o contador do orçamento registrou uma única requisição ao Gemini para os dois.
+
+### Orçamento diário por provedor, no fuso do provedor
+
+A cota gratuita de cada provedor é diária — 500 requisições no Gemini, 1.000 no Groq. Estourá-la não custa dinheiro aqui, mas custa a triagem: o provedor passa a responder `429` até o dia virar. O orçamento fica abaixo da cota (450 e 900, com folga para uso fora da aplicação) e é conferido **antes** de cada requisição: esgotado, o provedor é pulado sem requisição, como num circuito aberto, e a vez passa ao próximo.
+
+O dia é contado **no fuso em que o provedor conta**. O painel do Google mostra a cota em UTC-8: o dia do Gemini vira à meia-noite do Pacífico, e não à de Brasília nem à de UTC. Contar em outro fuso deixaria horas em que o orçamento já zerou e a cota do provedor não. Um teste avança o relógio até a meia-noite do Pacífico e confere que o Gemini volta.
+
+O contador fica no banco, e a reserva é uma única instrução que só incrementa se ainda houver saldo (`INSERT ... ON CONFLICT DO UPDATE ... WHERE requisicoes < :orcamento RETURNING`): vinte reservas simultâneas disputando as cinco últimas requisições do dia resultam em exatamente cinco aceitas. O orçamento fica no ponto mais interno da pilha, colado ao cliente HTTP, e conta cada requisição que de fato sai, inclusive novas tentativas e correções — é assim que o provedor conta. E o circuit breaker **ignora** o orçamento esgotado: no Resilience4j, exceção que não conta como falha conta como sucesso, e sem o `ignoreException` um orçamento esgotado fecharia um circuito que estava aberto por falhas de verdade.
+
+### Limite de chamados por cliente
+
+Cada chamado registrado vira pelo menos uma requisição a um provedor, e a cota diária é compartilhada por todos os visitantes da demonstração: sem limite, um único script a esgotaria em minutos. O cache não protege disso, porque basta variar o texto. São **10 chamados por hora por endereço IP**; passado o limite, `429` em Problem Details com `Retry-After` — o mesmo cabeçalho que a aplicação respeita quando vem do provedor, agora dizendo ao cliente quando a janela vira.
+
+- **Qual IP.** Atrás de um proxy, como o do Render, o endereço da conexão é o do proxy, e o do cliente vem no `X-Forwarded-For`. O primeiro endereço desse cabeçalho, o que quase todo exemplo usa, é justamente o que o cliente controla: trocando-o a cada requisição, o limite deixaria de valer. Confiável é só o que os nossos proxies escreveram, contando de trás para frente — um, no Render. Um teste confere que o endereço forjado é ignorado.
+- **Janela fixa de uma hora**, contada no banco com um `INSERT ... ON CONFLICT ... RETURNING` atômico, sem corrida entre requisições nem entre instâncias. Ela permite até o dobro do limite na virada da hora; uma janela deslizante evitaria isso guardando o horário de cada chamado. Para proteger cota, o dobro ocasional é aceitável.
+- **O IP não é guardado**, só o hash dele, e as janelas encerradas são apagadas por uma limpeza periódica junto com o cache vencido e os contadores de dias passados.
+- **Corpo inválido não gasta o limite**: é recusado pela validação antes de chegar à contagem.
+
+Na aplicação real, o 11º `POST` da hora recebeu `429` com `Retry-After: 1536`, os segundos que faltavam para a hora virar.
 
 ### O SDK não repete chamadas escondido
 
@@ -269,7 +304,7 @@ Nenhum teste automatizado chama um provedor real. O WireMock sobe um servidor HT
 
 | Método | Caminho | Resposta |
 |---|---|---|
-| `POST` | `/api/chamados` | `202` com o chamado `RECEBIDO` e o cabeçalho `Location` |
+| `POST` | `/api/chamados` | `202` com o chamado `RECEBIDO` e o cabeçalho `Location`; `429` com `Retry-After` passado o limite de 10 por hora |
 | `GET` | `/api/chamados/{id}` | `200` com o chamado e, depois da triagem, a classificação; `404` se não existir |
 
 ```bash
@@ -306,6 +341,7 @@ Depois que o worker triar o chamado, o `GET` traz a classificação. Resposta re
     "prioridade": "MEDIA",
     "resumo": "Impossibilidade de emissao de segunda via de boleto no aplicativo.",
     "provedor": "gemini",
+    "doCache": false,
     "triadoEm": "2026-10-15T15:37:33.418883Z"
   },
   "proximaTentativaAutomatica": null
@@ -397,7 +433,10 @@ Os testes são a prova do argumento central. O WireMock faz o papel dos provedor
 | Pendente com os provedores de volta | o revisor retoma o chamado na hora marcada, e não antes, e ele fica triado | comprovado (`DegradacaoIT`) |
 | Pendente que continua falhando | as revisões se espaçam (5min, 30min, 2h) e, depois da quarta falha, nenhuma requisição a mais | comprovado (`DegradacaoIT`) |
 | Cinco falhas seguidas no principal | o circuito abre e o principal recebe zero requisições durante a janela; depois dela, uma única chamada de teste fecha ou reabre o circuito | comprovado (`DisjuntorIT`) |
-| O mesmo texto enviado duas vezes | a segunda triagem vem do cache, sem chamar o provedor | Etapa 8 |
+| O mesmo texto enviado duas vezes | a segunda triagem vem do cache, com zero requisições ao provedor; vale também com maiúsculas, acentos e espaços diferentes | comprovado (`CacheIT`) |
+| Orçamento diário do principal esgotado | o principal é pulado sem requisição, o secundário responde, e o principal volta na virada do dia no fuso dele | comprovado (`OrcamentoDiarioIT`) |
+| Instâncias disputando o fim do orçamento | passam exatamente as requisições que cabem | comprovado (`OrcamentoDiarioIT`) |
+| Mesmo cliente passa de 10 chamados na hora | `429` com `Retry-After`, sem gravar o chamado; outro cliente não é afetado | comprovado (`LimiteDeChamadosIT`) |
 
 ---
 
@@ -417,7 +456,7 @@ Java 21 · Spring Boot 4 · Spring AI · Google Gemini · Groq · PostgreSQL · 
 - [x] **Etapa 5** — Tempo limite e nova tentativa só para erros transitórios, respeitando o `Retry-After`
 - [x] **Etapa 6** — Segundo provedor (Groq), cadeia de fallback e circuit breaker por provedor
 - [x] **Etapa 7** — Degradação: triagem manual quando todos os provedores falham e job de nova tentativa
-- [ ] **Etapa 8** — Controle de custo: cache por texto normalizado, limite por cliente e orçamento diário
+- [x] **Etapa 8** — Controle de custo: cache por texto normalizado, limite por cliente e orçamento diário
 - [ ] **Etapa 9** — Métricas por provedor com Micrometer e Prometheus
 - [ ] **Etapa 10** — Página de demonstração
 - [ ] **Etapa 11** — Dockerfile, CI no GitHub Actions e deploy no Render

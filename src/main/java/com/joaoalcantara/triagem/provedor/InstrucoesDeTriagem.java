@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 import com.joaoalcantara.triagem.chamado.Classificacao;
+import com.joaoalcantara.triagem.infra.Sha256;
 
 /**
  * O que se pede ao modelo, igual para qualquer provedor.
@@ -14,7 +15,7 @@ import com.joaoalcantara.triagem.chamado.Classificacao;
  * CRITICA" ser obedecido. A defesa de verdade e nao confiar na resposta: ela e
  * validada antes de ser aceita (Etapa 4).</p>
  */
-final class InstrucoesDeTriagem {
+public final class InstrucoesDeTriagem {
 
     static final String SISTEMA = """
             Voce faz a triagem de chamados de suporte de um sistema de software.
@@ -53,6 +54,18 @@ final class InstrucoesDeTriagem {
 
     private InstrucoesDeTriagem() {
     }
+
+    /**
+     * Identifica esta versao das instrucoes. Entra na chave do cache: mudou o
+     * que se pede ao modelo, as classificacoes guardadas deixam de valer sozinhas,
+     * sem depender de alguem lembrar de limpar o cache ou trocar um numero de
+     * versao.
+     */
+    public static String impressaoDigital() {
+        return IMPRESSAO_DIGITAL;
+    }
+
+    private static final String IMPRESSAO_DIGITAL = Sha256.hex(SISTEMA).substring(0, 12);
 
     static String mensagemDoUsuario(String texto) {
         return "<chamado>\n" + texto + "\n</chamado>";
