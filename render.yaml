@@ -1,0 +1,81 @@
+# Blueprint do Render: a infraestrutura do deploy descrita em arquivo, junto do
+# codigo, em vez de configurada a mao no painel.
+#
+# Como usar: no painel do Render, New > Blueprint, apontando para este
+# repositorio. Ele le este arquivo, cria o servico e pergunta os valores
+# marcados com "sync: false".
+#
+# O PostgreSQL NAO esta aqui de proposito — veja a nota no fim.
+
+services:
+  - type: web
+    name: triagem-chamados
+    runtime: docker
+    plan: free
+    region: virginia
+    dockerfilePath: ./Dockerfile
+
+    # O Render chama este caminho para decidir se a instancia esta viva. Sem
+    # isso ele so olha se a porta abriu, e a porta abre antes de o Flyway
+    # terminar de migrar. O health inclui o banco.
+    healthCheckPath: /actuator/health
+
+    # "checksPass" e nao "commit": o deploy so acontece se o CI passar. Um push
+    # que quebra os testes nao chega em producao.
+    autoDeployTrigger: checksPass
+
+    envVars:
+      # Ativa o perfil "prod", que pelo grupo do application.properties tambem
+      # ativa o "docker": log estruturado em JSON e health sem detalhes.
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+
+      # Credenciais do PostgreSQL no Neon (veja a nota no fim). "sync: false" faz
+      # o Render perguntar o valor na criacao, em vez de deixa-lo escrito neste
+      # arquivo; ficam guardadas cifradas pelo Render.
+      - key: DB_URL
+        sync: false
+      - key: DB_USERNAME
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+
+      # Chaves dos provedores de IA. So existem aqui (cifradas) e no .env local
+      # de quem desenvolve; nunca no repositorio nem no CI. Sem uma delas, aquele
+      # provedor fica fora da cadeia; sem as duas, a aplicacao sobe do mesmo jeito
+      # e os chamados vao para triagem manual.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+
+      # De onde vem o IP do cliente, para o limite de chamados por hora. Atras
+      # dos proxies do Render, o endereco da conexao e o de um proxy: sem estas
+      # variaveis, todos os visitantes dividiriam o mesmo limite. Ver
+      # IdentificadorDeCliente e a secao "Limite de chamados por cliente" do
+      # README, que registra como estes valores foram medidos.
+      - key: CABECALHO_DO_IP
+        value: True-Client-IP
+      - key: PROXIES_CONFIAVEIS
+        value: "1"
+
+# -----------------------------------------------------------------------------
+# Por que o PostgreSQL nao esta neste arquivo
+#
+# O PostgreSQL gratuito do Render expira 30 dias depois de criado. Num projeto de
+# portfolio isso significa o link ao vivo morrendo todo mes, provavelmente na
+# semana em que alguem for olhar.
+#
+# O banco fica entao no Neon, cujo plano gratuito e permanente. As credenciais
+# entram como DB_URL, DB_USERNAME e DB_PASSWORD. O Neon exige TLS: a DB_URL
+# precisa terminar em ?sslmode=require.
+#
+# -----------------------------------------------------------------------------
+# Hibernacao
+#
+# A instancia gratuita hiberna depois de 15 minutos sem trafego, e com ela o
+# worker de triagem e o revisor de pendentes. Nada se perde: os chamados ficam no
+# banco, e a primeira requisicao acorda a instancia (cerca de um minuto), que
+# volta a processar a fila. Um pendente agendado para as 3h e revisto na primeira
+# visita depois disso.
+# -----------------------------------------------------------------------------

@@ -11,7 +11,29 @@ import org.springframework.mock.web.MockHttpServletRequest;
 class IdentificadorDeClienteTest {
 
     private static IdentificadorDeCliente comProxies(int proxies) {
-        return new IdentificadorDeCliente(new PropriedadesDoCusto(Duration.ofDays(30), 10, proxies, Duration.ofHours(1)));
+        return new IdentificadorDeCliente(
+                new PropriedadesDoCusto(Duration.ofDays(30), 10, proxies, "", Duration.ofHours(1)));
+    }
+
+    private static IdentificadorDeCliente comCabecalho(String cabecalho) {
+        return new IdentificadorDeCliente(
+                new PropriedadesDoCusto(Duration.ofDays(30), 10, 1, cabecalho, Duration.ofHours(1)));
+    }
+
+    @Test
+    @DisplayName("com cabecalho configurado, vale o que a infraestrutura escreveu nele, e nao o X-Forwarded-For")
+    void cabecalhoConfigurado() {
+        MockHttpServletRequest requisicao = requisicao("10.0.0.5", "1.2.3.4, 172.70.1.1");
+        requisicao.addHeader("True-Client-IP", "203.0.113.7");
+
+        assertThat(comCabecalho("True-Client-IP").enderecoDe(requisicao)).isEqualTo("203.0.113.7");
+    }
+
+    @Test
+    @DisplayName("cabecalho configurado mas ausente: volta ao X-Forwarded-For")
+    void cabecalhoAusente() {
+        assertThat(comCabecalho("True-Client-IP").enderecoDe(requisicao("10.0.0.5", "203.0.113.7")))
+                .isEqualTo("203.0.113.7");
     }
 
     private static MockHttpServletRequest requisicao(String enderecoDaConexao, String xForwardedFor) {

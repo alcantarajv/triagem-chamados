@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Nenhuma chave de provedor de IA aqui, nem em "secrets": os testes nunca chamam
+# um provedor real. O WireMock faz o papel do Gemini e do Groq, e a imagem e
+# testada sem chave nenhuma, que e justamente o cenario de degradacao.
+
+jobs:
+  build:
+    name: Build e testes
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configura Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          # Cache do ~/.m2 gerenciado pela propria action, com chave derivada do pom.
+          cache: maven
+
+      # Git no Windows nao versiona o bit de execucao (core.fileMode = false por
+      # padrao), entao o mvnw chega ao runner Linux sem permissao de execucao e
+      # "./mvnw" falha com "Permission denied".
+      - name: Garante o bit de execucao do wrapper
+        run: chmod +x ./mvnw
+
+      # O runner do GitHub ja tem Docker, o que permite ao Testcontainers subir o
+      # PostgreSQL real que os testes de integracao exigem.
+      - name: Build e suite completa
+        run: ./mvnw -B verify
+
+      # Publicado mesmo quando a suite falha: sem isso, um teste vermelho no CI
+      # obrigaria a reproduzir localmente para saber o que quebrou.
+      - name: Publica relatorios de teste
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorios-de-teste
+          path: |
+            target/surefire-reports/
+            target/failsafe-reports/
+          retention-days: 7
+
+  imagem:
+    name: Imagem Docker de ponta a ponta
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Sobe a imagem do Dockerfile com o PostgreSQL do compose.yaml, sem chave
+      # de provedor. "--wait" so devolve quando os healthchecks passam: o banco
+      # aceitando consultas e o /actuator/health da aplicacao em UP.
+      - name: Sobe a aplicacao com o Compose
+        run: docker compose --profile completo up -d --build --wait
+
+      - name: Health, pagina e metricas respondem
+        run: |
+          curl -fsS http://localhost:8080/actuator/health | grep -q '"status":"UP"'
+          curl -fsS http://localhost:8080/ | grep -q 'Não cole dados pessoais'
+          curl -fsS http://localhost:8080/actuator/prometheus | grep -q '^triagem_fila{'
+          echo "OK: health, pagina de demonstracao e metricas."
+
+      # O argumento central do projeto, na imagem que vai para producao: sem
+      # provedor nenhum, a API continua aceitando chamados com 202, e o chamado
+      # nao se perde — fica pendente, com nova tentativa agendada.
+      - name: Sem chave, o chamado e aceito e fica pendente
+        run: |
+          resposta=$(curl -fsS -i -X POST http://localhost:8080/api/chamados \
+            -H 'Content-Type: application/json' \
+            -d '{"texto":"Teste de fumaca do CI: o sistema de pedidos esta lento."}')
+          echo "$resposta" | head -1 | grep -q ' 202'
+          local_do_chamado=$(echo "$resposta" | grep -i '^location:' | tr -d '\r' | cut -d' ' -f2)
+
+          for tentativa in $(seq 1 30); do
+            status=$(curl -fsS "http://localhost:8080$local_do_chamado" | jq -r .status)
+            if [ "$status" = "PENDENTE_TRIAGEM_MANUAL" ]; then
+              curl -fsS "http://localhost:8080$local_do_chamado" | jq '{status, triagem, proximaTentativaAutomatica}'
+              echo "OK: chamado aceito e pendente, sem nenhum provedor configurado."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "O chamado nao chegou a PENDENTE_TRIAGEM_MANUAL (ultimo status: $status)."
+          exit 1
+
+      - name: Logs da aplicacao
+        if: failure()
+        run: docker compose --profile completo logs app
+
+      - name: Derruba o ambiente
+        if: always()
+        run: docker compose --profile completo down -v

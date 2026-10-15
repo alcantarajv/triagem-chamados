@@ -1,0 +1,12 @@
+target/
+.git/
+.github/
+.idea/
+.vscode/
+.claude/
+*.iml
+.env
+README.md
+CLAUDE.md
+compose.yaml
+render.yaml

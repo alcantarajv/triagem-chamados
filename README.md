@@ -307,6 +307,16 @@ Toda resposta de erro é `application/problem+json` (RFC 9457) com um `type` est
 
 As chaves dos provedores de IA entram só por variável de ambiente: um arquivo `.env` local, fora do Git, e o painel da plataforma de deploy. O CI não precisa de chave nenhuma, porque nenhum teste automatizado chama um provedor real — um servidor simulado faz esse papel.
 
+### Imagem, CI e deploy
+
+- **Dockerfile em duas etapas**: a imagem final carrega só o JRE e o jar, roda com um usuário sem privilégios e ajusta a heap ao limite de memória do container. Os testes não rodam dentro do build: os de integração precisam de Docker, e rodam no CI.
+- **CI no GitHub Actions, sem chave nenhuma.** Um job roda a suíte completa (unitários e integração, com Testcontainers e WireMock). Outro constrói a imagem e sobe a aplicação com o Compose, **sem provedor configurado**, conferindo de ponta a ponta o que o projeto promete: health em `UP`, página e métricas no ar, e um chamado aceito com `202` que fica pendente com a próxima tentativa agendada, em vez de virar `500`.
+- **Render por Blueprint** (`render.yaml`): o serviço descrito em arquivo, com deploy só quando o CI passa (`autoDeployTrigger: checksPass`) e as chaves dos provedores e do banco cadastradas cifradas no painel, nunca no repositório.
+- **Banco no Neon, e não no Render**: o PostgreSQL gratuito do Render expira em 30 dias, e o do Neon é permanente.
+- **Cabe no plano gratuito.** Com limite de 512 MB e o perfil de produção, a aplicação subiu em cerca de 7 segundos e ficou em 286 MB depois de triar chamados e servir métricas.
+
+A instância gratuita hiberna depois de 15 minutos sem tráfego, e com ela o worker e o revisor de pendentes. Nada se perde: os chamados ficam no banco, e a primeira visita acorda a instância, que volta a processar a fila.
+
 ### A aplicação sobe sem chave de provedor
 
 Sem `GEMINI_API_KEY`, a aplicação sobe, avisa no log e continua recebendo chamados; a triagem automática falha e os chamados vão para triagem manual. Recusar subir tiraria do ar também o registro de chamados, que não depende de IA nenhuma — e o CI, que não tem chave, não conseguiria nem testar. O `ContextoDaAplicacaoIT` guarda essa regra: sobe a aplicação com a chave vazia e quebra no dia em que alguma dependência passar a exigir uma.
@@ -444,6 +454,14 @@ curl http://localhost:8080/actuator/health
 ```
 
 O `health` agrega o estado do banco: se o PostgreSQL estiver fora, a resposta é `DOWN`.
+
+### Tudo em container
+
+A mesma imagem que vai para produção, construída pelo `Dockerfile`, sobe junto com o banco num profile do Compose:
+
+```bash
+docker compose --profile completo up --build
+```
 
 ### Sem Docker Compose
 

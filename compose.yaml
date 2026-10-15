@@ -18,5 +18,46 @@ services:
       timeout: 5s
       retries: 10
 
+  # A aplicacao. Fica num profile para que "docker compose up -d" continue
+  # subindo so o banco — o modo do dia a dia, com a aplicacao rodando pela IDE
+  # ou pelo mvnw. Para subir tudo, com a imagem do Dockerfile:
+  #
+  #     docker compose --profile completo up --build
+  app:
+    build: .
+    container_name: triagem-app
+    profiles: [completo]
+    environment:
+      # O hostname e o nome do servico: dentro da rede do Compose, "db" resolve
+      # para o container do banco. Usar localhost aqui e o erro mais comum —
+      # localhost, dentro do container, e o proprio container.
+      DB_URL: jdbc:postgresql://db:5432/triagem
+      DB_USERNAME: triagem
+      DB_PASSWORD: triagem
+
+      # Chaves vem do .env local, nunca deste arquivo, que e versionado. Sem
+      # elas — como no CI —, a aplicacao sobe do mesmo jeito e os chamados vao
+      # para triagem manual.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+
+      # Log estruturado e health sem detalhes: ver application-docker.properties.
+      SPRING_PROFILES_ACTIVE: docker
+    ports:
+      - "8080:8080"
+    depends_on:
+      # service_healthy, e nao apenas service_started: o Postgres aceita conexao
+      # antes de estar pronto para consultas, e o Flyway quebraria na largada.
+      db:
+        condition: service_healthy
+    healthcheck:
+      # O health do Actuator inclui o banco: "de pe" aqui significa que a
+      # aplicacao alcanca o PostgreSQL, nao so que o processo subiu.
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
 volumes:
   triagem-db-data:
