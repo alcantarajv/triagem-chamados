@@ -7,6 +7,8 @@ API REST que recebe chamados de suporte em texto livre e usa um modelo de lingua
 
 O que este projeto resolve não é o prompt. É a engenharia de backend em volta de uma dependência que **demora, falha, cobra por uso e às vezes responde algo fora do combinado**.
 
+---
+
 ## No ar
 
 **<https://triagem-chamados-yh4a.onrender.com>**
@@ -29,7 +31,6 @@ O serviço roda no plano gratuito do Render e hiberna quando ocioso: a primeira 
 - [Como rodar](#como-rodar)
 - [Testes](#testes)
 - [Stack](#stack)
-- [Roadmap](#roadmap)
 - [Projetos relacionados](#projetos-relacionados)
 - [Autor](#autor)
 - [Licença](#licença)
@@ -294,34 +295,13 @@ Os testes automatizados nunca chamam um provedor real; os comportamentos que dep
 
 ## Stack
 
-Java 21 · Spring Boot 4.1 · Spring AI 2.0 · Resilience4j 2.4 · PostgreSQL 17 · Flyway · Micrometer/Prometheus · Google Gemini (`gemini-3.5-flash-lite`) · Groq (`openai/gpt-oss-20b`) · JUnit 5 · AssertJ · Testcontainers 2 · WireMock 3 · Docker · GitHub Actions · Render · Neon
-
----
-
-## Roadmap
-
-As etapas de código estão concluídas. Cada uma virou um commit, e as decisões técnicas foram registradas à medida que cada uma era implementada.
-
-- [x] **Etapa 0** — Repositório: README, `.gitignore`, licença e primeiro commit
-- [x] **Etapa 1** — Scaffold Spring Boot, Actuator, Docker Compose com PostgreSQL e estrutura de pacotes
-- [x] **Etapa 2** — Domínio sem IA: `Chamado`, estados, Flyway, `POST` (202) e `GET`, Problem Details
-- [x] **Etapa 3** — Primeiro provedor (Gemini) com saída estruturada e worker assíncrono com `SKIP LOCKED`
-- [x] **Etapa 4** — Validação da saída do modelo, com uma nova tentativa informando o erro
-- [x] **Etapa 5** — Tempo limite e nova tentativa só para erros transitórios, respeitando o `Retry-After`
-- [x] **Etapa 6** — Segundo provedor (Groq), cadeia de fallback e circuit breaker por provedor
-- [x] **Etapa 7** — Degradação: triagem manual quando todos os provedores falham e job de nova tentativa
-- [x] **Etapa 8** — Controle de custo: cache por texto normalizado, limite por cliente e orçamento diário
-- [x] **Etapa 9** — Métricas por provedor com Micrometer e Prometheus
-- [x] **Etapa 10** — Página de demonstração
-- [x] **Etapa 11** — Dockerfile, CI no GitHub Actions e deploy no Render
-- [x] **Etapa 12** — README final
-- [ ] **Etapa 13** — Divulgação
+Java 21 · Spring Boot 4.1 · Spring AI 2.0 · Resilience4j 2.4 · PostgreSQL 17 · Flyway · Micrometer/Prometheus · Google Gemini (`gemini-3.5-flash-lite`) · Groq (`openai/gpt-oss-20b`) · JUnit 6 · AssertJ · Testcontainers 2 · WireMock 3 · Docker · GitHub Actions · Render · Neon
 
 ---
 
 ## Projetos relacionados
 
-Este é o quarto de uma série, e cada um ataca um problema de backend que só aparece em produção:
+Este é o quarto de uma série de quatro projetos, e cada um ataca um problema de backend que só aparece em produção:
 
 1. [encurtador-links](https://github.com/alcantarajv/encurtador-links) — **latência**: cache com Redis, rate limiting, processamento assíncrono
 2. [reserva-quadras](https://github.com/alcantarajv/reserva-quadras) — **concorrência**: constraint de exclusão do PostgreSQL e teste multi-thread
